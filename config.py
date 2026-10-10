@@ -1,4 +1,4 @@
-"""Configuration locale de RadCase Manager (V2).
+"""Configuration locale de RadCase Manager (V3).
 
 Les réglages propres à la machine (nom d'utilisateur, chemin du dossier partagé)
 sont stockés dans ``settings_data/settings.json``, à côté de l'application ou du

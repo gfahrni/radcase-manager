@@ -5,7 +5,7 @@ Application de bureau (cible **Windows, exécutable portable**) permettant aux
 radiologues de cataloguer des cas cliniques à partir d'images collées depuis le
 presse-papiers, dans un **dossier réseau partagé**.
 
-## Architecture (V2)
+## Architecture (V3)
 - Source de vérité = le dossier partagé, **un dossier par cas** :
   `cases/<AAAA-MM>/<id>/case.md` + `image.png`.
 - `case.md` = frontmatter **YAML** (id, title, date_added, date_modified, case_type,

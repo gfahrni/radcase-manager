@@ -1,4 +1,4 @@
-"""Interface graphique PySide6 de RadCase Manager (V2).
+"""Interface graphique PySide6 de RadCase Manager (V3).
 
 Deux onglets :
 - « Nouveau cas » : collage du presse-papiers + formulaire d'enregistrement.
