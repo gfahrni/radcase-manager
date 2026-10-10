@@ -1,0 +1,43 @@
+# RadCase Manager — Instructions projet
+
+## Contexte
+Application de bureau (cible **Windows, exécutable portable**) permettant aux
+radiologues de cataloguer des cas cliniques à partir d'images collées depuis le
+presse-papiers, dans un **dossier réseau partagé**.
+
+## Architecture (V2)
+- Source de vérité = le dossier partagé, **un dossier par cas** :
+  `cases/<AAAA-MM>/<id>/case.md` + `image.png`.
+- `case.md` = frontmatter **YAML** (id, title, date_added, date_modified, case_type,
+  author, units, image) suivi de la description en markdown.
+- **Pas de SQLite** (choix délibéré) : les cas sont **figés** (append-only), donc
+  écriture dans un dossier temporaire `.tmp_<id>` puis `os.rename` **atomique**.
+- Réglages locaux dans `settings_data/settings.json` (jamais sur le partage).
+- Justification complète dans `ARCHITECTURE_PLAN.md`.
+
+## Modules
+- `config.py` : réglages locaux + chemins (gère le mode PyInstaller « frozen »).
+- `bootstrap.py` : init du dossier partagé (`cases/`, `units.json`, `README.md`).
+- `storage.py` : `create_case()`, `update_case()`, `delete_case()`, `list_cases()`,
+  `search_cases()`, plus l'**index local** (`settings_data/index.db`, cache
+  reconstructible, maj par mtime).
+- `main_gui.py` : interface PySide6 (onglets « Nouveau cas » / « Consulter »).
+
+## Conventions
+- GUI en **PySide6** ; frontmatter en **PyYAML** ; capture image via **QClipboard**
+  (Pillow n'est plus utilisé pour la capture) ; suppression via **send2trash**.
+- L'onglet « Consulter » n'affiche **rien par défaut** (recherche à la demande),
+  pour ne pas saturer avec des milliers de cas.
+- Textes de l'UI et commentaires en **français**.
+- Ne pas modifier `archive/` : ce sont des instantanés par version (`v1/`, `v2.1/`…).
+  Le travail actif se fait à la racine du projet.
+
+## Commandes
+- Installer : `pip install -r requirements.txt` (environnement `.venv`).
+- Lancer : `python main_gui.py`.
+- Tester le backend sans GUI : voir `README.md`.
+
+## Vérifications
+- Après modification d'un `*.py` : `python -m py_compile <fichier>`.
+- PySide6 peut ne pas être installé sur la machine : garder la logique backend
+  (`storage.py`, `bootstrap.py`, `config.py`) testable en CLI, sans GUI.

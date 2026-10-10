@@ -1,0 +1,6 @@
+PySide6>=6.6
+PyYAML>=6.0
+Send2Trash>=1.8
+# Pillow n'est plus nécessaire pour la capture (le presse-papiers est lu via Qt).
+# Décommenter uniquement si un traitement d'image est ajouté.
+# Pillow>=10.0

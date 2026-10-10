@@ -1,0 +1,133 @@
+# 🎯 RadCase Manager — Architecture V2
+
+Application de bureau légère permettant aux radiologues de cataloguer rapidement
+des cas cliniques à partir d'images collées depuis le presse-papiers, dans un
+**dossier réseau partagé**.
+
+## 🧠 Décision d'architecture : fichiers plutôt que SQLite
+
+La V1 utilisait une base SQLite unique posée sur le dossier partagé. **C'est un
+anti-pattern** : les base SQLite sur partage réseau (SMB/NFS) ne peuvent pas
+s'appuyer sur des verrous fiables, et une écriture concurrente depuis deux postes
+peut **corrompre tout le fichier**.
+
+La V2 exploite une caractéristique clé du besoin : **les cas sont figés**
+(append-only, jamais modifiés). Dans ce contexte :
+
+- Chaque nouveau cas = **un nouveau dossier au nom unique** → deux postes qui
+  créent un cas en même temps écrivent dans deux dossiers différents →
+  **aucun conflit de verrou**.
+- Données **lisibles par un humain** et **sauvegardables** trivialement.
+- Aucune migration de schéma, aucune dépendance serveur.
+
+### Source de vérité
+
+Un **dossier par cas**, contenant ses métadonnées `.md` et son image :
+
+```
+[Dossier Partagé]/
+├── cases/
+│   └── 2026-10/                        # sharding par mois
+│       └── 20261008_174301_5709/       # id = YYYYMMDD_HHMMSS_xxxx
+│           ├── case.md                 # frontmatter YAML + description
+│           └── image.png
+├── units.json                          # vocabulaire contrôlé des unités
+└── README.md
+```
+
+### Réglages locaux (jamais sur le partage)
+
+À côté de l'application/du binaire :
+
+```
+settings_data/
+└── settings.json     # nom d'utilisateur + chemin du dossier partagé
+```
+
+## 📄 Format d'un cas (`case.md`)
+
+```markdown
+---
+id: 20261008_174301_5709
+title: Scanner thoracique de routine
+date_added: 2026-10-08T17:43:01
+case_type: Standard
+author: Dr Martin
+units: [Thorax, Collection perso]
+image: image.png
+---
+
+Description narrative, observations clés...
+```
+
+- `id` : `YYYYMMDD_HHMMSS_xxxx` (horodatage + 4 car. aléatoires) → unicité entre postes.
+- `case_type` : `Standard` (défaut) / `Typique` / `Exceptionnel` (choix exclusif).
+- `units` : tags libres issus de `units.json`. `"Collection perso"` remplace
+  l'ancienne table `Units_Personal`.
+- `image` : nom **relatif** dans le dossier du cas → cas auto-contenu.
+
+## 🔒 Écriture atomique
+
+```
+1. Image     ← presse-papiers (QClipboard)
+2. id        ← horodatage + uuid
+3. mkdir     cases/<YYYY-MM>/.tmp_<id>/
+4. Écrire    image.png + case.md (UTF-8)
+5. os.rename .tmp_<id>/  →  <id>/        ← atomique sur le même partage
+6. En cas d'échec → suppression du dossier temporaire
+```
+
+Un cas n'existe que lorsque son dossier au **nom final** est complet. Les dossiers
+`.tmp_*` sont ignorés au scan.
+
+## ✏️ Édition
+
+Un cas est éditable (onglet « Édition » dédié, ouvert par clic droit → « Modifier »).
+
+- `id` et `date_added` sont **conservés** ; une clé `date_modified` est ajoutée.
+- L'ancien dossier est envoyé à la **corbeille**, puis le nouveau est réécrit
+  **à la même place** (même chemin, même `id`).
+- Dernier écrivain gagne (pas de verrou) : l'édition est rare et non simultanée.
+- En mode édition, l'**import automatique du presse-papiers est désactivé** pour
+  ne pas écraser l'image en cours.
+
+## 🔎 Recherche
+
+La recherche s'appuie sur un **index local** (`settings_data/index.db`), jamais
+posé sur le partage réseau :
+
+- Cache des métadonnées (titre, date, auteur, unités, description, chemin relatif).
+- **Mise à jour incrémentale** : un `case.md` n'est re-parsé que si son `mtime`
+  ou sa taille a changé (`os.scandir` + stat mise en cache).
+- **Reconstructible** : si l'index est supprimé, corrompu, ou si le dossier
+  partagé change, il est reconstruit automatiquement au prochain scan.
+- Ordre de grandeur mesuré (1 000 cas, disque local) : scan froid ~0,5 s,
+  scan chaud ~0,05 s, recherche filtrée ~0,05 s.
+
+Filtres : unités, auteur, plage de dates, texte (titre + description).
+
+⚠️ Aucun affichage par défaut : l'onglet « Consulter » ne liste rien tant qu'un
+critère n'est pas saisi (évite de déverser des milliers de lignes).
+
+## 🧩 Modules
+
+| Module | Rôle |
+|---|---|
+| `config.py` | réglages locaux (`settings.json`), chemins |
+| `bootstrap.py` | crée `cases/`, `units.json`, `README.md` si absents |
+| `storage.py` | presse-papiers, `create_case()`, `list_cases()`, `search_cases()` |
+| `main_gui.py` | interface PySide6 (saisie + consultation) |
+
+## 🛠️ Dépendances
+
+- `PySide6` (GUI + presse-papiers)
+- `Pillow` (DÉPRÉCIÉ pour la capture, conservé pour le traitement d'image optionnel)
+- `PyYAML` (frontmatter)
+- `sqlite3` (stdlib, utilisé pour l'index local `settings_data/index.db`)
+
+## 🏁 Roadmap V2
+
+1. **Phase 1 — Fondation** : `config.py`, `bootstrap.py`, structure partagée.
+2. **Phase 2 — Moteur** : `storage.py` (création atomique + lecture + recherche).
+3. **Phase 3 — Interface** : `main_gui.py` (saisie, collage presse-papiers, consultation).
+4. **Phase 4 — Distribution** : binaire portable Windows via PyInstaller.
