@@ -617,6 +617,7 @@ def search_cases(
     date_to: Optional[datetime] = None,
     viewer: str = "",
     visibility: Optional[str] = None,
+    case_types: Optional[Iterable[str]] = None,
 ) -> List[Case]:
     """Recherche multi-critères, exécutée sur l'index local.
 
@@ -661,6 +662,8 @@ def search_cases(
         if not _visible_to(case, viewer):
             continue
         if visibility is not None and case.visibility != visibility:
+            continue
+        if case_types is not None and case.case_type not in case_types:
             continue
         if author_l and author_l not in case.author.casefold():
             continue

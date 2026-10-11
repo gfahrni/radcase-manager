@@ -515,6 +515,25 @@ FEED_ANCHORS = [
 _JOURS_FR = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
 
 
+def make_case_type_checkboxes() -> list:
+    """3 cases à cocher (📄 Standard / 🎓 Typique / 🤩 Exceptionnel), cochées.
+
+    Chaque case porte la propriété ``case_type`` avec le nom du type.
+    """
+    boxes = []
+    for case_type in bootstrap.CASE_TYPES:
+        cb = QCheckBox(f"{case_type['emoji']}  {case_type['name']}")
+        cb.setProperty("case_type", case_type["name"])
+        cb.setChecked(True)
+        boxes.append(cb)
+    return boxes
+
+
+def checked_case_types(boxes) -> set:
+    """Noms des types cochés (filtre « type de cas »)."""
+    return {cb.property("case_type") for cb in boxes if cb.isChecked()}
+
+
 class CaseBrowserPage(QWidget):
     """Onglet de navigation : menu d'unités (gauche) + grille de vignettes.
 
@@ -584,6 +603,22 @@ class CaseBrowserPage(QWidget):
         self.menu_layout.setSpacing(2)
         self.menu_scroll.setWidget(self.menu_container)
         left_layout.addWidget(self.menu_scroll, 1)
+
+        # Filtre « Type de cas » (3 cases à cocher), au-dessus de la bascule.
+        types_box = QWidget()
+        types_box.setAttribute(Qt.WA_StyledBackground, True)
+        types_box.setStyleSheet("border-top: 1px solid #444;")
+        types_layout = QVBoxLayout(types_box)
+        types_layout.setContentsMargins(6, 6, 6, 6)
+        types_layout.setSpacing(2)
+        types_title = QLabel("Type de cas")
+        types_title.setStyleSheet("color:#bbb; font-weight:bold;")
+        types_layout.addWidget(types_title)
+        self.case_type_checkboxes = make_case_type_checkboxes()
+        for cb in self.case_type_checkboxes:
+            cb.toggled.connect(self._on_case_type_changed)
+            types_layout.addWidget(cb)
+        left_layout.addWidget(types_box)
 
         # Bascule « Cas publics » / « Cas privés », ancrée en bas du menu.
         switch = QWidget()
@@ -702,10 +737,14 @@ class CaseBrowserPage(QWidget):
             cases = []
 
         unit = self._selected_unit
-        self._unit_cases = (
-            [case for case in cases if unit in case.units] if unit is not None else cases
-        )
+        cases = [case for case in cases if unit in case.units] if unit is not None else cases
+        types = checked_case_types(self.case_type_checkboxes)
+        self._unit_cases = [case for case in cases if case.case_type in types]
         self._refresh_grid()
+
+    def _on_case_type_changed(self) -> None:
+        """Un type de cas a été (dé)coché : recharge la grille."""
+        self.reload_cases()
 
     def _on_quick_search(self, text: str) -> None:
         """Filtre instantanément les cas affichés selon le nom saisi."""
@@ -879,13 +918,14 @@ class FeedView(QWidget):
     def set_settings(self, settings: config.Settings) -> None:
         self.settings = settings
 
-    def load(self, anchor=None, units=None, unread_ids=None) -> None:
+    def load(self, anchor=None, units=None, unread_ids=None, case_types=None) -> None:
         """Reconstruit le fil, du plus ancien (haut) au plus récent (bas).
 
         ``anchor`` : instant sur lequel se positionner à l'ouverture (tous les cas
         restent affichés : on remonte pour l'historique) ; ``None`` = le plus
         récent (bas). ``units`` : unités suivies (``None`` = toutes).
         ``unread_ids`` : identifiants des cas « nouveaux » (carte à fond bleu).
+        ``case_types`` : types de cas à afficher (``None`` = tous).
         """
         self._unread_ids = set(unread_ids or ())
         self._cards_by_id = {}
@@ -906,6 +946,8 @@ class FeedView(QWidget):
         if units is not None:
             wanted = {u.casefold() for u in units}
             cases = [c for c in cases if wanted & {u.casefold() for u in c.units}]
+        if case_types is not None:
+            cases = [c for c in cases if c.case_type in case_types]
 
         cases.sort(key=lambda case: case.date_added)  # ancien (haut) → récent (bas)
 
@@ -1161,6 +1203,8 @@ class MainWindow(QMainWindow):
         if not units:
             return []
         wanted = {u.casefold() for u in units}
+        boxes = getattr(self, "feed_case_type_checkboxes", None)
+        types = checked_case_types(boxes) if boxes is not None else None
         since = self._feed_session_watermark or ""
         me = (self.settings.user_name or "").strip().casefold()
         try:
@@ -1172,6 +1216,8 @@ class MainWindow(QMainWindow):
         result = []
         for case in cases:
             if not (wanted & {u.casefold() for u in case.units}):
+                continue
+            if types is not None and case.case_type not in types:
                 continue
             if since and (case.date_added or "") <= since:
                 continue
@@ -1332,6 +1378,22 @@ class MainWindow(QMainWindow):
         self.feed_units_scroll.setWidget(self.feed_units_container)
         top_layout.addWidget(self.feed_units_scroll, 1)
 
+        # Filtre « Type de cas » (3 cases à cocher), en bas de la sélection.
+        feed_types_box = QWidget()
+        feed_types_box.setAttribute(Qt.WA_StyledBackground, True)
+        feed_types_box.setStyleSheet("border-top: 1px solid #444;")
+        feed_types_layout = QVBoxLayout(feed_types_box)
+        feed_types_layout.setContentsMargins(6, 6, 6, 6)
+        feed_types_layout.setSpacing(2)
+        feed_types_title = QLabel("Type de cas")
+        feed_types_title.setStyleSheet("color:#bbb; font-weight:bold;")
+        feed_types_layout.addWidget(feed_types_title)
+        self.feed_case_type_checkboxes = make_case_type_checkboxes()
+        for cb in self.feed_case_type_checkboxes:
+            cb.toggled.connect(self._on_feed_case_type_changed)
+            feed_types_layout.addWidget(cb)
+        top_layout.addWidget(feed_types_box)
+
         left_layout.addWidget(top, 1)
 
         # --- Moitié basse : ancrages temporels ---
@@ -1415,6 +1477,15 @@ class MainWindow(QMainWindow):
             if cb.isChecked()
         ]
 
+    def selected_feed_case_types(self) -> set:
+        """Types de cas cochés dans le fil."""
+        return checked_case_types(getattr(self, "feed_case_type_checkboxes", []))
+
+    def _on_feed_case_type_changed(self) -> None:
+        """Un type de cas a été (dé)coché dans le fil : rafraîchit le fil et le badge."""
+        self._refresh_feed()
+        self._update_feed_badge()
+
     def _remember_feed_units(self) -> None:
         """Mémorise la sélection d'unités suivies, puis rafraîchit le fil."""
         self.settings.feed_units = self.selected_feed_units()
@@ -1461,7 +1532,10 @@ class MainWindow(QMainWindow):
         anchor = self._feed_anchor_datetime(self._active_feed_anchor())
         unread = {case.id for case in self._unread_cases()}
         self.feed_view.load(
-            anchor, units=self.selected_feed_units(), unread_ids=unread
+            anchor,
+            units=self.selected_feed_units(),
+            unread_ids=unread,
+            case_types=self.selected_feed_case_types(),
         )
 
     # --- Onglet « Nouveau cas » ------------------------------------------- #
@@ -2135,14 +2209,26 @@ class MainWindow(QMainWindow):
         buttons_layout.addWidget(export_btn)
         buttons_layout.addStretch()
 
+        # Ligne « Type de cas » (3 cases à cocher), sous Unités/Période.
+        self.search_case_type_checkboxes = make_case_type_checkboxes()
+        types_row = QWidget()
+        types_layout = QHBoxLayout(types_row)
+        types_layout.setContentsMargins(0, 0, 0, 0)
+        types_layout.addWidget(QLabel("Type de cas :"))
+        for cb in self.search_case_type_checkboxes:
+            cb.toggled.connect(self._maybe_search_case_type)
+            types_layout.addWidget(cb)
+        types_layout.addStretch()
+
         # Texte sur toute la largeur ; puis Auteur + Collection ; puis Unités/Période.
         grid.addWidget(labeled("Texte :", self.search_text), 0, 0, 1, 2)
         grid.addWidget(labeled("Auteur :", self.search_author), 1, 0)
         grid.addWidget(labeled("Collection :", self.search_visibility), 1, 1)
         grid.addWidget(labeled("Unités :", self.units_button), 2, 0)
         grid.addWidget(labeled("Période :", self.period_button), 2, 1)
-        grid.addWidget(buttons_row, 3, 0, 1, 2)
-        grid.addWidget(self.free_date_row, 4, 0, 1, 2)
+        grid.addWidget(types_row, 3, 0, 1, 2)
+        grid.addWidget(buttons_row, 4, 0, 1, 2)
+        grid.addWidget(self.free_date_row, 5, 0, 1, 2)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
 
@@ -2219,6 +2305,15 @@ class MainWindow(QMainWindow):
         """Relance la recherche au changement de collection."""
         # Pendant la construction de l'onglet, la liste de résultats n'existe
         # pas encore : on ignore le signal initial.
+        if hasattr(self, "results_list"):
+            self.run_search()
+
+    def selected_search_case_types(self) -> set:
+        """Types de cas cochés dans les filtres de recherche."""
+        return checked_case_types(getattr(self, "search_case_type_checkboxes", []))
+
+    def _maybe_search_case_type(self) -> None:
+        """Relance la recherche quand un type de cas est (dé)coché."""
         if hasattr(self, "results_list"):
             self.run_search()
 
@@ -2359,6 +2454,7 @@ class MainWindow(QMainWindow):
                 date_to=date_to,
                 viewer=self.settings.user_name,
                 visibility=self.selected_search_visibility(),
+                case_types=self.selected_search_case_types(),
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Erreur de recherche", str(exc))
@@ -2374,6 +2470,10 @@ class MainWindow(QMainWindow):
             label = f"{case.title} – {case.date_added}  ({case.author})"
             if case.visibility == storage.VISIBILITY_PRIVATE:
                 label = "👤 " + label
+            type_txt = (
+                f"{bootstrap.CASE_TYPE_EMOJI.get(case.case_type, '')} {case.case_type}"
+            ).strip()
+            label += f"  [{type_txt}]"
             if case.units:
                 units_txt = ", ".join(
                     (f"{emoji_map.get(u, '')} {u}").strip() for u in case.units
@@ -2392,6 +2492,10 @@ class MainWindow(QMainWindow):
         self.search_visibility.blockSignals(True)  # évite une recherche intermédiaire
         self.search_visibility.setCurrentIndex(0)  # « Publique »
         self.search_visibility.blockSignals(False)
+        for cb in getattr(self, "search_case_type_checkboxes", []):
+            cb.blockSignals(True)
+            cb.setChecked(True)
+            cb.blockSignals(False)
         self._select_period(self.default_period)
         self.run_search()  # revient à la vue par défaut (« Cette semaine », publique)
 
