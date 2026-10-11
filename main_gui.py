@@ -217,23 +217,92 @@ class ImageFrame(QLabel):
             self.clicked.emit()
 
 
-class ImageOverlay(QLabel):
-    """Superposition couvrant la fenêtre, affichant l'image du cas en grand."""
+class ClickableLabel(QLabel):
+    """Étiquette cliquable (ouvre le détail au clic sur une image)."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        self.clicked.emit()
+
+
+class DetailOverlay(QWidget):
+    """Superposition plein fenêtre : image zoomée + titre, description et métadonnées.
+
+    Ouverte au clic sur une image (Recherche Avancée, Bibliothèque, Fil). Le
+    contenu défile si nécessaire ; fermeture par un clic n'importe où ou Échap.
+    """
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
-        self.setAlignment(Qt.AlignCenter)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("background-color: black;")
-        self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
-        self._source: QPixmap | None = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setStyleSheet(
+            "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget"
+            "{ background: black; }"
+        )
+        self.scroll.viewport().installEventFilter(self)
+
+        self.container = QWidget()
+        self.container.installEventFilter(self)
+        self.vbox = QVBoxLayout(self.container)
+        self.vbox.setContentsMargins(40, 40, 40, 40)
+        self.vbox.setSpacing(12)
+        self.vbox.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+
+        self.image = QLabel()
+        self.image.setAlignment(Qt.AlignCenter)
+        self.image.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.vbox.addWidget(self.image, 0, Qt.AlignHCenter)
+
+        self.title = QLabel()
+        self.title.setWordWrap(True)
+        self.title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.title.setStyleSheet("color:#fff; font-size:18px; font-weight:bold;")
+        self.vbox.addWidget(self.title, 0, Qt.AlignHCenter)
+
+        self.description = QLabel()
+        self.description.setWordWrap(True)
+        self.description.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.description.setStyleSheet("color:#ddd; font-size:14px;")
+        self.vbox.addWidget(self.description, 0, Qt.AlignHCenter)
+
+        self.meta = QLabel()
+        self.meta.setWordWrap(True)
+        self.meta.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.meta.setStyleSheet("color:#888; font-size:11px;")
+        self.vbox.addWidget(self.meta, 0, Qt.AlignHCenter)
+
+        self.scroll.setWidget(self.container)
+        outer.addWidget(self.scroll)
+
+        self._source = None
         self.hide()
 
-    def show_image(self, source: QPixmap) -> None:
-        self._source = source
+    def show_case(self, case: storage.Case, source=None) -> None:
+        """Affiche le détail d'un cas (image fournie ou lue depuis le disque)."""
+        pixmap = source
+        if pixmap is None:
+            pixmap = QPixmap(str(case.image_path)) if case.image_path else QPixmap()
+        self._source = None if pixmap is None or pixmap.isNull() else pixmap
+
+        self.title.setText(case.title)
+        description = (case.description or "").strip()
+        self.description.setText(description)
+        self.description.setVisible(bool(description))
+        self.meta.setText(self._metadata_text(case))
+
         self.setGeometry(self.parentWidget().rect())
-        self._refresh()
+        self._layout_content()
+        self.scroll.verticalScrollBar().setValue(0)
         self.show()
         self.raise_()
         self.setFocus()
@@ -241,20 +310,86 @@ class ImageOverlay(QLabel):
     def refresh_geometry(self) -> None:
         if self.isVisible() and self.parentWidget() is not None:
             self.setGeometry(self.parentWidget().rect())
+            self._layout_content()
 
-    def _refresh(self) -> None:
+    def _layout_content(self) -> None:
+        """Adapte l'image et la largeur des textes à la taille de la fenêtre.
+
+        L'image ne prend que la hauteur **restante** une fois les textes posés
+        (plafonnée à 78 %), pour éviter tout ascenseur quand la fenêtre est
+        petite ; sur une grande fenêtre, le plafond s'applique et rien ne change.
+        """
+        margins = self.vbox.contentsMargins()
+        inner_width = self.width() - margins.left() - margins.right()
+        text_width = max(280, min(1000, int(self.width() * 0.9), inner_width))
+        for label in (self.title, self.description, self.meta):
+            label.setFixedWidth(text_width)
+
         if self._source is None:
+            self.image.clear()
+            self.image.setVisible(False)
             return
-        self.setPixmap(
-            self._source.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.image.setVisible(True)
+
+        labels = [self.title]
+        if self.description.text().strip():
+            labels.append(self.description)
+        labels.append(self.meta)
+        text_height = sum(self._text_height(label, text_width) for label in labels)
+
+        spacing = self.vbox.spacing()
+        gaps = spacing * len(labels)  # espaces entre image et blocs de texte
+        available = self.height() - margins.top() - margins.bottom() - text_height - gaps
+
+        max_w = max(200, inner_width)
+        max_h = max(120, min(int(self.height() * 0.78), available))
+        self.image.setPixmap(
+            self._source.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
+
+    @staticmethod
+    def _text_height(label: QLabel, width: int) -> int:
+        """Hauteur d'un texte sur la largeur donnée (retour à la ligne inclus)."""
+        from PySide6.QtCore import QRect
+
+        metrics = label.fontMetrics()
+        rect = metrics.boundingRect(
+            QRect(0, 0, width, 100000), Qt.TextWordWrap, label.text()
+        )
+        return rect.height()
+
+    @staticmethod
+    def _metadata_text(case: storage.Case) -> str:
+        """Métadonnées utiles, compactes (petit texte discret en bas)."""
+        parts = []
+        if case.author:
+            parts.append(case.author)
+        moment = case.datetime
+        if moment:
+            parts.append(
+                f"Ajouté le {moment.day:02d}.{moment.month:02d}.{moment.year} à {moment:%H:%M}"
+            )
+        if case.date_modified:
+            parts.append("Modifié le " + str(case.date_modified)[:16].replace("T", " "))
+        parts.append(case.case_type)
+        parts.append("Privé" if case.visibility == storage.VISIBILITY_PRIVATE else "Public")
+        if case.units:
+            parts.append(", ".join(case.units))
+        parts.append(f"#{case.id}")
+        return "   ·   ".join(parts)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
         super().resizeEvent(event)
-        self._refresh()
+        self._layout_content()
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
-        self.hide()
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (nom imposé par Qt)
+        if event.type() == QEvent.MouseButtonPress:
+            self.hide()
+            return True
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            self.hide()
+            return True
+        return super().eventFilter(obj, event)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
         if event.key() == Qt.Key_Escape:
@@ -339,9 +474,9 @@ class ConfirmCaseDialog(QDialog):
 CARD_IMG_W, CARD_IMG_H = 150, 112
 CARD_W = CARD_IMG_W + 10
 
-#: Dimensions du « Fil d'actualité » (cartes larges, type réseau social).
-FEED_CARD_W = 620
-FEED_IMG_W, FEED_IMG_H = 580, 400
+#: Dimensions du « Fil d'actualité » (cartes, type réseau social).
+FEED_CARD_W = 420
+FEED_IMG_W, FEED_IMG_H = 387, 267
 
 #: Ancrages temporels du fil : (libellé, décalage). J = jours, M = mois, A = ans.
 #: Cliquer un ancrage relance le fil à partir de cet instant (remontée vers le passé).
@@ -370,6 +505,9 @@ class CaseBrowserPage(QWidget):
     Une bascule en bas du menu choisit entre cas **publics** et cas **privés**
     (ces derniers limités aux cas privés de l'utilisateur courant).
     """
+
+    #: Émis avec le :class:`storage.Case` quand on clique l'image d'une vignette.
+    case_activated = Signal(object)
 
     def __init__(self, settings: config.Settings, visibility: str, parent: QWidget = None):
         super().__init__(parent)
@@ -614,9 +752,8 @@ class CaseBrowserPage(QWidget):
         if hasattr(self, "grid_scroll"):
             self._layout_cards()
 
-    @staticmethod
-    def _make_card(case: storage.Case) -> QFrame:
-        """Vignette d'un cas : image + titre (sous l'image)."""
+    def _make_card(self, case: storage.Case) -> QFrame:
+        """Vignette d'un cas : image (cliquable) + titre (sous l'image)."""
         card = QFrame()
         card.setFixedWidth(CARD_W)
         card.setToolTip(case.title)
@@ -624,11 +761,13 @@ class CaseBrowserPage(QWidget):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(4)
 
-        thumb = QLabel()
+        thumb = ClickableLabel()
         thumb.setFixedSize(CARD_IMG_W, CARD_IMG_H)
         thumb.setAlignment(Qt.AlignCenter)
         thumb.setAttribute(Qt.WA_StyledBackground, True)
+        thumb.setCursor(Qt.PointingHandCursor)
         thumb.setStyleSheet("background-color: black;")
+        thumb.clicked.connect(lambda c=case: self.case_activated.emit(c))
         pixmap = QPixmap(str(case.image_path)) if case.image_path else QPixmap()
         if pixmap.isNull():
             thumb.setText("—")
@@ -664,6 +803,9 @@ class FeedView(QWidget):
     indique le changement de jour. Chaque carte affiche l'image en grand, le
     titre puis la description.
     """
+
+    #: Émis avec le :class:`storage.Case` quand on clique l'image d'une carte.
+    case_activated = Signal(object)
 
     def __init__(self, settings: config.Settings, parent: QWidget = None):
         super().__init__(parent)
@@ -813,9 +955,8 @@ class FeedView(QWidget):
         row.addWidget(line(), 1)
         return container
 
-    @staticmethod
-    def _make_feed_card(case: storage.Case) -> QFrame:
-        """Carte du fil : grande image + titre + description (légende)."""
+    def _make_feed_card(self, case: storage.Case) -> QFrame:
+        """Carte du fil : grande image (cliquable) + titre + description (légende)."""
         card = QFrame()
         card.setObjectName("feedCard")
         card.setAttribute(Qt.WA_StyledBackground, True)
@@ -825,11 +966,13 @@ class FeedView(QWidget):
         column.setContentsMargins(16, 16, 16, 16)
         column.setSpacing(8)
 
-        image = QLabel()
+        image = ClickableLabel()
         image.setFixedSize(FEED_IMG_W, FEED_IMG_H)
         image.setAlignment(Qt.AlignCenter)
         image.setAttribute(Qt.WA_StyledBackground, True)
+        image.setCursor(Qt.PointingHandCursor)
         image.setStyleSheet("background:black; border-radius:6px;")
+        image.clicked.connect(lambda c=case: self.case_activated.emit(c))
         pixmap = QPixmap(str(case.image_path)) if case.image_path else QPixmap()
         if pixmap.isNull():
             image.setText("—")
@@ -880,6 +1023,7 @@ class MainWindow(QMainWindow):
         # Onglet de navigation « Bibliothèque » : menu d'unités (gauche) + grille
         # de vignettes. La bascule en bas du menu choisit cas publics / privés.
         self.browser = CaseBrowserPage(settings, storage.VISIBILITY_PUBLIC)
+        self.browser.case_activated.connect(self._show_case_detail)
         self.public_list_tab_index = self.tabs.addTab(self.browser, "📖 Bibliothèque")
         self.consult_tab_index = self.tabs.addTab(self._build_consult_tab(), "🔎 Recherche Avancée")
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -889,9 +1033,10 @@ class MainWindow(QMainWindow):
 
         # Bandeau de confirmation non bloquant (créé une fois, réutilisé).
         self._toast = Toast(self)
-        # Superposition plein écran (dans la fenêtre) pour agrandir une image.
-        self._overlay = ImageOverlay(self)
-        self.case_image.clicked.connect(self._show_fullscreen_image)
+        # Superposition de détail (image + titre + description + métadonnées).
+        self._overlay = DetailOverlay(self)
+        self._selected_case = None
+        self.case_image.clicked.connect(self._show_selected_case_detail)
 
         self._build_status_bar()
 
@@ -940,10 +1085,15 @@ class MainWindow(QMainWindow):
         if overlay is not None:
             overlay.refresh_geometry()
 
-    def _show_fullscreen_image(self) -> None:
-        """Affiche l'image du cas en grand (superposition couvrant la fenêtre)."""
-        if self.case_image._source is not None:
-            self._overlay.show_image(self.case_image._source)
+    def _show_case_detail(self, case) -> None:
+        """Ouvre le détail zoomé (image + titre + description + métadonnées)."""
+        if case is not None:
+            self._overlay.show_case(case)
+
+    def _show_selected_case_detail(self) -> None:
+        """Détail du cas actuellement sélectionné dans « Recherche Avancée »."""
+        if self._selected_case is not None:
+            self._overlay.show_case(self._selected_case)
 
     def _on_tab_changed(self, index: int) -> None:
         if index == self.new_case_tab_index:
@@ -1088,6 +1238,7 @@ class MainWindow(QMainWindow):
         feed_content_layout = QVBoxLayout(self.feed_content)
         feed_content_layout.setContentsMargins(0, 0, 0, 0)
         self.feed_view = FeedView(self.settings)
+        self.feed_view.case_activated.connect(self._show_case_detail)
         feed_content_layout.addWidget(self.feed_view)
         layout.addWidget(self.feed_content, 85)
 
@@ -2071,6 +2222,7 @@ class MainWindow(QMainWindow):
         self.results_list.clear()
         self.detail.clear()
         self.case_image.clear_source()
+        self._selected_case = None
         self._results = {}
         emoji_map = {u["name"]: u.get("emoji", "") for u in bootstrap.load_units(self.settings.shared_root)}
         for case in cases:
@@ -2147,10 +2299,12 @@ class MainWindow(QMainWindow):
         if current is None:
             self.detail.clear()
             self.case_image.clear_source()
+            self._selected_case = None
             return
         case = self._results.get(id(current))
         if case is None:
             return
+        self._selected_case = case
         description = case.description.strip()
         self.detail.setPlainText(f"{case.title}\n\n{description}" if description else case.title)
         self.case_image.set_source(case.image_path)
