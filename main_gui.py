@@ -1378,25 +1378,9 @@ class MainWindow(QMainWindow):
         self.feed_units_scroll.setWidget(self.feed_units_container)
         top_layout.addWidget(self.feed_units_scroll, 1)
 
-        # Filtre « Type de cas » (3 cases à cocher), en bas de la sélection.
-        feed_types_box = QWidget()
-        feed_types_box.setAttribute(Qt.WA_StyledBackground, True)
-        feed_types_box.setStyleSheet("border-top: 1px solid #444;")
-        feed_types_layout = QVBoxLayout(feed_types_box)
-        feed_types_layout.setContentsMargins(6, 6, 6, 6)
-        feed_types_layout.setSpacing(2)
-        feed_types_title = QLabel("Type de cas")
-        feed_types_title.setStyleSheet("color:#bbb; font-weight:bold;")
-        feed_types_layout.addWidget(feed_types_title)
-        self.feed_case_type_checkboxes = make_case_type_checkboxes()
-        for cb in self.feed_case_type_checkboxes:
-            cb.toggled.connect(self._on_feed_case_type_changed)
-            feed_types_layout.addWidget(cb)
-        top_layout.addWidget(feed_types_box)
-
         left_layout.addWidget(top, 1)
 
-        # --- Moitié basse : ancrages temporels ---
+        # --- Zone basse : ancrages temporels ---
         bottom = QWidget()
         bottom.setAttribute(Qt.WA_StyledBackground, True)
         bottom.setStyleSheet("border-top: 1px solid #444;")
@@ -1432,6 +1416,23 @@ class MainWindow(QMainWindow):
         bottom_layout.addWidget(anchors_scroll)
 
         left_layout.addWidget(bottom, 1)
+
+        # --- Zone basse : filtre « Type de cas » (3 cases à cocher) ---
+        feed_types_box = QWidget()
+        feed_types_box.setAttribute(Qt.WA_StyledBackground, True)
+        feed_types_box.setStyleSheet("border-top: 1px solid #444;")
+        feed_types_layout = QVBoxLayout(feed_types_box)
+        feed_types_layout.setContentsMargins(6, 6, 6, 6)
+        feed_types_layout.setSpacing(2)
+        feed_types_title = QLabel("Type de cas")
+        feed_types_title.setStyleSheet("color:#bbb; font-weight:bold; padding:0 0 2px 0;")
+        feed_types_layout.addWidget(feed_types_title)
+        self.feed_case_type_checkboxes = make_case_type_checkboxes()
+        for cb in self.feed_case_type_checkboxes:
+            cb.toggled.connect(self._on_feed_case_type_changed)
+            feed_types_layout.addWidget(cb)
+        # Zone compacte : uniquement la hauteur des 3 coches (pas de stretch).
+        left_layout.addWidget(feed_types_box)
 
         layout.addWidget(left, 15)
 
