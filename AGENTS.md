@@ -9,7 +9,8 @@ presse-papiers, dans un **dossier réseau partagé**.
 - Source de vérité = le dossier partagé, **un dossier par cas** :
   `cases/<AAAA-MM>/<id>/case.md` + `image.png`.
 - `case.md` = frontmatter **YAML** (id, title, date_added, date_modified, case_type,
-  author, units, image) suivi de la description en markdown.
+  visibility, author, units, image) suivi de la description en markdown.
+  `visibility` = `public` (défaut) ou `private` (masqué de la recherche des autres).
 - **Pas de SQLite** (choix délibéré) : les cas sont **figés** (append-only), donc
   écriture dans un dossier temporaire `.tmp_<id>` puis `os.rename` **atomique**.
 - Réglages locaux dans `settings_data/settings.json` (jamais sur le partage).

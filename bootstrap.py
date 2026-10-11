@@ -14,10 +14,6 @@ CASES_DIRNAME = "cases"
 UNITS_FILENAME = "units.json"
 README_FILENAME = "README.md"
 
-# Nom de l'unité personnelle (remplace l'ancienne table Units_Personal).
-PERSONAL_UNIT = "Collection perso"
-PERSONAL_EMOJI = "👤"
-
 # Unité fourre-tout, toujours affichée en dernier.
 DIVERS_NAME = "Divers"
 

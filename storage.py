@@ -34,6 +34,31 @@ TMP_PREFIX = ".tmp_"
 # Sentinelle : « conserver l'image existante » lors d'une édition.
 KEEP_IMAGE = object()
 
+# --- Visibilité -------------------------------------------------------------
+# Un cas « public » est visible par tous ; un cas « privé » n'est visible que
+# de son auteur (caché de la recherche pour les autres utilisateurs).
+VISIBILITY_PUBLIC = "public"
+VISIBILITY_PRIVATE = "private"
+VISIBILITY_VALUES = (VISIBILITY_PUBLIC, VISIBILITY_PRIVATE)
+
+# Ancienne « unité » personnelle (avant la visibilité) : conservée uniquement
+# pour la nettoyer à la lecture des cas historiques.
+LEGACY_PERSONAL_UNIT = "Collection perso"
+
+
+def _normalize_visibility(value: Any) -> str:
+    """Ramène toute valeur à ``public`` ou ``private`` (défaut : ``public``)."""
+    token = str(value or "").strip().casefold()
+    return VISIBILITY_PRIVATE if token in ("private", "privé", "prive") else VISIBILITY_PUBLIC
+
+
+def _visible_to(case: "Case", viewer: str) -> bool:
+    """Vrai si ``viewer`` peut voir ce cas (auteur des cas privés, ou tous)."""
+    if case.visibility != VISIBILITY_PRIVATE:
+        return True
+    viewer_l = (viewer or "").strip().casefold()
+    return bool(viewer_l) and case.author.strip().casefold() == viewer_l
+
 
 # --- Modèle -----------------------------------------------------------------
 
@@ -52,6 +77,7 @@ class Case:
     folder: Optional[Path] = None
     date_modified: Optional[str] = None
     case_type: str = "Standard"
+    visibility: str = VISIBILITY_PUBLIC
 
     @property
     def image_path(self) -> Optional[Path]:
@@ -110,17 +136,21 @@ def _parse_case_md(path: Path) -> Optional[Case]:
         return None
 
     body = "\n".join(lines[end + 1:]).strip()
+    # Nettoyage des cas historiques : l'ancienne pseudo-unité personnelle
+    # disparaît du vocabulaire (les anciens cas deviennent publics).
+    units = [u for u in (meta.get("units") or []) if u and u != LEGACY_PERSONAL_UNIT]
     return Case(
         id=str(meta.get("id", path.parent.name)),
         title=str(meta.get("title", "")),
         date_added=str(meta.get("date_added", "")),
         author=str(meta.get("author", "")),
-        units=list(meta.get("units") or []),
+        units=units,
         image=meta.get("image") or None,
         description=body,
         folder=path.parent,
         date_modified=str(meta["date_modified"]) if meta.get("date_modified") else None,
         case_type=str(meta.get("case_type") or "Standard"),
+        visibility=_normalize_visibility(meta.get("visibility")),
     )
 
 
@@ -148,10 +178,13 @@ def create_case(
     shared_root: str | Path,
     when: Optional[datetime] = None,
     case_type: str = "Standard",
+    visibility: str = VISIBILITY_PUBLIC,
 ) -> Case:
     """Crée un cas de façon atomique et retourne l'objet :class:`Case`.
 
     ``image`` peut être ``None``, des ``bytes``, un ``PIL.Image`` ou un ``QImage``.
+    ``visibility`` vaut ``"public"`` (défaut) ou ``"private"`` : un cas privé
+    n'apparaît dans la recherche que pour son auteur.
     Lève ``ValueError`` si le titre est vide ou le dossier partagé manquant.
     """
     title = (title or "").strip()
@@ -190,6 +223,7 @@ def create_case(
             "units": [u for u in (units or []) if u],
             "image": image_name,
             "case_type": case_type or "Standard",
+            "visibility": _normalize_visibility(visibility),
         }
         (tmp_dir / CASE_FILENAME).write_text(
             _render_case_md(meta, description), encoding="utf-8"
@@ -209,6 +243,7 @@ def create_case(
         description=(description or "").strip(),
         folder=final_dir,
         case_type=meta["case_type"],
+        visibility=meta["visibility"],
     )
     _index_touch_case(result, shared_path)
     return result
@@ -227,6 +262,7 @@ def update_case(
     image: Any = KEEP_IMAGE,
     shared_root: str | Path,
     case_type: str = "Standard",
+    visibility: Optional[str] = None,
 ) -> Case:
     """Met à jour un cas existant en réécrivant son dossier « à sa place ».
 
@@ -234,6 +270,7 @@ def update_case(
     - L'ancien dossier est envoyé dans la **corbeille** avant réécriture.
     - ``image`` : ``KEEP_IMAGE`` (défaut) réutilise l'image existante, ``None``
       la retire, toute autre valeur (bytes/PIL/QImage) la remplace.
+    - ``visibility`` : ``None`` (défaut) conserve la visibilité du cas.
     - Écriture atomique par fichier (dossier temporaire puis renommage).
     """
     title = (title or "").strip()
@@ -262,6 +299,9 @@ def update_case(
 
         # 2) case.md : on conserve id + date_added, on ajoute date_modified.
         modified = datetime.now().isoformat(timespec="seconds")
+        visibility = _normalize_visibility(
+            visibility if visibility is not None else case.visibility
+        )
         meta = {
             "id": case.id,
             "title": title,
@@ -271,6 +311,7 @@ def update_case(
             "units": [u for u in (units or []) if u],
             "image": image_name,
             "case_type": case_type or "Standard",
+            "visibility": visibility,
         }
         (tmp_dir / CASE_FILENAME).write_text(
             _render_case_md(meta, description), encoding="utf-8"
@@ -294,6 +335,7 @@ def update_case(
         folder=final_dir,
         date_modified=modified,
         case_type=meta["case_type"],
+        visibility=meta["visibility"],
     )
     _index_touch_case(result, Path(shared_root))
     return result
@@ -331,7 +373,7 @@ def delete_case(case: "Case") -> bool:
 
 # --- Index local (cache reconstructible) -------------------------------------
 
-INDEX_SCHEMA_VERSION = "1"
+INDEX_SCHEMA_VERSION = "2"
 
 
 def _index_path() -> Path:
@@ -356,7 +398,8 @@ def _index_connect() -> sqlite3.Connection:
             description   TEXT,
             rel_path      TEXT NOT NULL,
             mtime         REAL,
-            size          INTEGER
+            size          INTEGER,
+            visibility    TEXT
         )"""
     )
     conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
@@ -366,6 +409,8 @@ def _index_connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE cases_index ADD COLUMN date_modified TEXT")
     if "case_type" not in columns:
         conn.execute("ALTER TABLE cases_index ADD COLUMN case_type TEXT")
+    if "visibility" not in columns:
+        conn.execute("ALTER TABLE cases_index ADD COLUMN visibility TEXT")
     return conn
 
 
@@ -383,7 +428,8 @@ def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 def _row_to_case(row: tuple, root: Path) -> Case:
-    (case_id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, *_rest) = row
+    (case_id, title, date_added, date_modified, case_type, author, units, image,
+     description, rel_path, _mtime, _size, visibility) = row
     return Case(
         id=case_id,
         title=title or "",
@@ -395,23 +441,24 @@ def _row_to_case(row: tuple, root: Path) -> Case:
         folder=root / rel_path,
         date_modified=date_modified or None,
         case_type=case_type or "Standard",
+        visibility=_normalize_visibility(visibility),
     )
 
 
 def _index_upsert(conn: sqlite3.Connection, case: Case, rel_path: str, mtime: float, size: int) -> None:
     conn.execute(
         """INSERT INTO cases_index
-             (id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             (id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              title=excluded.title, date_added=excluded.date_added, date_modified=excluded.date_modified,
              case_type=excluded.case_type, author=excluded.author, units=excluded.units,
              image=excluded.image, description=excluded.description, rel_path=excluded.rel_path,
-             mtime=excluded.mtime, size=excluded.size""",
+             mtime=excluded.mtime, size=excluded.size, visibility=excluded.visibility""",
         (
             case.id, case.title, case.date_added, case.date_modified, case.case_type, case.author,
             json.dumps(case.units, ensure_ascii=False), case.image, case.description,
-            rel_path, mtime, size,
+            rel_path, mtime, size, case.visibility,
         ),
     )
 
@@ -462,6 +509,10 @@ def refresh_index(shared_root: str | Path) -> int:
         if _meta_get(conn, "shared_root") != str(root):
             conn.execute("DELETE FROM cases_index")
             _meta_set(conn, "shared_root", str(root))
+        # Changement de schéma : l'index est un cache, on le vide pour forcer
+        # une relecture complète des ``case.md`` (nouvelles colonnes/migrations).
+        if _meta_get(conn, "schema_version") != INDEX_SCHEMA_VERSION:
+            conn.execute("DELETE FROM cases_index")
         _meta_set(conn, "schema_version", INDEX_SCHEMA_VERSION)
 
         known = {
@@ -532,11 +583,16 @@ def _index_remove(case_id: str) -> None:
 # --- Lecture / recherche -----------------------------------------------------
 
 
-_SELECT_COLS = "id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size"
+_SELECT_COLS = "id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility"
 
 
-def list_cases(shared_root: str | Path) -> List[Case]:
-    """Retourne tous les cas (via l'index), du plus récent au plus ancien."""
+def list_cases(shared_root: str | Path, viewer: str = "") -> List[Case]:
+    """Retourne tous les cas visibles (via l'index), du plus récent au plus ancien.
+
+    ``viewer`` est le nom de l'utilisateur courant : les cas privés ne sont
+    inclus que si ``viewer`` en est l'auteur. Par défaut (``""``), aucun cas
+    privé n'est retourné.
+    """
     root = Path(shared_root)
     refresh_index(root)
     conn = _index_connect()
@@ -546,7 +602,8 @@ def list_cases(shared_root: str | Path) -> List[Case]:
         ).fetchall()
     finally:
         conn.close()
-    return [_row_to_case(row, root) for row in rows]
+    cases = [_row_to_case(row, root) for row in rows]
+    return [case for case in cases if _visible_to(case, viewer)]
 
 
 def search_cases(
@@ -558,11 +615,19 @@ def search_cases(
     unit_match_all: bool = False,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
+    viewer: str = "",
+    visibility: Optional[str] = None,
 ) -> List[Case]:
     """Recherche multi-critères, exécutée sur l'index local.
 
     Les filtres auteur, texte et unités sont appliqués côté Python (via
     ``casefold``, correct pour les accents), la plage de dates via SQL.
+
+    ``viewer`` est le nom de l'utilisateur courant : les cas privés ne sont
+    retournés que s'il en est l'auteur (sinon ils restent cachés).
+
+    ``visibility`` restreint à ``"public"`` ou ``"private"`` (``None`` : les deux,
+    les cas privés d'autrui restant exclus).
     """
     root = Path(shared_root)
     refresh_index(root)
@@ -593,6 +658,10 @@ def search_cases(
     results: List[Case] = []
     for row in rows:
         case = _row_to_case(row, root)
+        if not _visible_to(case, viewer):
+            continue
+        if visibility is not None and case.visibility != visibility:
+            continue
         if author_l and author_l not in case.author.casefold():
             continue
         if wanted:
@@ -606,17 +675,21 @@ def search_cases(
     return results
 
 
-def all_unit_tags(shared_root: str | Path) -> List[str]:
+def all_unit_tags(shared_root: str | Path, viewer: str = "") -> List[str]:
     """Liste triée de toutes les unités effectivement utilisées dans les cas."""
-    tags = {u for case in list_cases(shared_root) for u in case.units}
+    tags = {u for case in list_cases(shared_root, viewer=viewer) for u in case.units}
     return sorted(tags, key=str.casefold)
 
 
-def all_authors(shared_root: str | Path) -> List[str]:
-    """Liste triée des auteurs présents dans les cas (pour l'autocomplétion)."""
+def all_authors(shared_root: str | Path, viewer: str = "") -> List[str]:
+    """Liste triée des auteurs présents dans les cas (pour l'autocomplétion).
+
+    Les cas privés d'autrui sont exclus (``viewer``), pour ne pas révéler leur
+    existence via la liste des auteurs.
+    """
     authors = {
         case.author.strip()
-        for case in list_cases(shared_root)
+        for case in list_cases(shared_root, viewer=viewer)
         if case.author and case.author.strip()
     }
     return sorted(authors, key=str.casefold)

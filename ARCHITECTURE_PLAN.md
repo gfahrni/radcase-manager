@@ -52,8 +52,9 @@ id: 20261008_174301_5709
 title: Scanner thoracique de routine
 date_added: 2026-10-08T17:43:01
 case_type: Standard
+visibility: public
 author: Dr Martin
-units: [Thorax, Collection perso]
+units: [Thorax]
 image: image.png
 ---
 
@@ -62,9 +63,13 @@ Description narrative, observations clés...
 
 - `id` : `YYYYMMDD_HHMMSS_xxxx` (horodatage + 4 car. aléatoires) → unicité entre postes.
 - `case_type` : `Standard` (défaut) / `Typique` / `Exceptionnel` (choix exclusif).
-- `units` : tags libres issus de `units.json`. `"Collection perso"` remplace
-  l'ancienne table `Units_Personal`.
+- `visibility` : `public` (défaut) ou `private`. Un cas **privé** n'apparaît dans
+  la recherche que pour son auteur (`author`) ; il reste toutefois physiquement
+  présent sur le dossier partagé (filtrage d'interface, pas de contrôle d'accès).
+- `units` : tags libres issus de `units.json` (au moins une unité requise).
 - `image` : nom **relatif** dans le dossier du cas → cas auto-contenu.
+  **Obligatoire via l'interface** : on ne peut enregistrer (création ou édition)
+  qu'avec une image présente.
 
 ## 🔒 Écriture atomique
 
@@ -104,7 +109,8 @@ posé sur le partage réseau :
 - Ordre de grandeur mesuré (1 000 cas, disque local) : scan froid ~0,5 s,
   scan chaud ~0,05 s, recherche filtrée ~0,05 s.
 
-Filtres : unités, auteur, plage de dates, texte (titre + description).
+Filtres : collection (👥 publique / 👤 privé / les deux), unités, auteur,
+plage de dates, texte (titre + description).
 
 ⚠️ Aucun affichage par défaut : l'onglet « Consulter » ne liste rien tant qu'un
 critère n'est pas saisi (évite de déverser des milliers de lignes).

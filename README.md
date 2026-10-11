@@ -15,6 +15,8 @@ partagé**.
 - **Cas figés** (append-only) : on n'écrit jamais deux fois le même cas, ce qui
   évite tout conflit de verrou sur le partage réseau.
 - **Écriture atomique** : dossier temporaire `.tmp_<id>` puis renommage.
+- **Visibilité** : chaque cas est `public` (défaut) ou `privé`. Un cas privé
+  n'apparaît dans la recherche que pour son auteur.
 - **Réglages locaux** dans `settings_data/settings.json` (jamais sur le partage).
 
 Voir `ARCHITECTURE_PLAN.md` pour la justification détaillée (et pourquoi pas SQLite).
@@ -79,8 +81,8 @@ cas il crée aussi une **release GitHub** avec le `.exe` attaché.
 Exemple pour publier une version :
 
 ```bash
-git tag -a v3.2 -m "RadCase Manager v3.2"
-git push origin v3.2
+git tag -a v3.5 -m "RadCase Manager v3.5"
+git push origin v3.5
 ```
 
 ## Structure du projet
@@ -100,11 +102,12 @@ Le module `storage` est utilisable directement :
 import storage
 case = storage.create_case(
     title="Scanner thoracique",
-    units=["Thorax", "Collection personnelle"],
+    units=["Thorax"],
     author="Dr Martin",
     description="Exemple.",
     image=None,
     shared_root="/chemin/vers/dossier/partage",
+    visibility="public",   # ou "private" : visible du seul auteur
 )
 print(case.folder)
 ```

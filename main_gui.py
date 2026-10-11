@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QCompleter,
     QDateEdit,
     QDialog,
@@ -47,7 +48,6 @@ from PySide6.QtWidgets import (
 import bootstrap
 import config
 import storage
-from bootstrap import PERSONAL_EMOJI, PERSONAL_UNIT
 
 PREVIEW_W, PREVIEW_H = 400, 320
 
@@ -271,8 +271,8 @@ class ConfirmCaseDialog(QDialog):
     """Résumé du cas (avec vignette) demandé avant l'enregistrement."""
 
     def __init__(self, parent, *, title: str, description: str, units_text: str,
-                 personal_selected: bool, case_type: str = "Standard", image=None,
-                 heading: str = "Confirmer l'enregistrement"):
+                 visibility: str = storage.VISIBILITY_PUBLIC, case_type: str = "Standard",
+                 image=None, heading: str = "Confirmer l'enregistrement"):
         super().__init__(parent)
         self.setWindowTitle(heading)
         self.setMinimumWidth(560)
@@ -302,8 +302,9 @@ class ConfirmCaseDialog(QDialog):
         units_label = QLabel(units_text or "—")
         units_label.setWordWrap(True)
         info.addRow("Unités :", units_label)
-        personal_label = QLabel(PERSONAL_EMOJI if personal_selected else "—")
-        info.addRow("Collection personnelle :", personal_label)
+        private = visibility == storage.VISIBILITY_PRIVATE
+        visibility_label = QLabel("👤 Privé (visible de moi seul)" if private else "👥 Public")
+        info.addRow("Visibilité :", visibility_label)
         content.addLayout(info, 1)
         outer.addLayout(content)
 
@@ -444,8 +445,8 @@ class MainWindow(QMainWindow):
 
         # Colonne gauche : aperçu de l'image.
         left = QVBoxLayout()
-        left.addWidget(QLabel("<h3>Image du cas</h3>"))
-        self.preview = QLabel("Aucune image.\nL'image du presse-papiers est importée à l'activation,\nou cliquez sur « Coller l'image du presse-papiers ».")
+        left.addWidget(QLabel("<h3>Image du cas (obligatoire)</h3>"))
+        self.preview = QLabel("Aucune image.\n⚠️ Une image est obligatoire pour enregistrer.\nL'image du presse-papiers est importée à l'activation,\nou cliquez sur « Coller l'image du presse-papiers ».")
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setFixedSize(PREVIEW_W, PREVIEW_H)
         self.preview.setAttribute(Qt.WA_StyledBackground, True)
@@ -461,6 +462,12 @@ class MainWindow(QMainWindow):
         clear_img_btn = QPushButton("Retirer l'image")
         clear_img_btn.clicked.connect(self.clear_image)
         left.addWidget(clear_img_btn)
+
+        visibility_row, self.visibility_buttons = self._make_visibility_row()
+        left.addWidget(visibility_row)
+
+        type_row, self.case_type_buttons = self._make_case_type_row()
+        left.addWidget(type_row)
 
         self.clipboard_hint = QLabel("")
         self.clipboard_hint.setWordWrap(True)
@@ -499,8 +506,6 @@ class MainWindow(QMainWindow):
         self.units_scroll.setWidget(self.units_container)
         self.units_scroll.setMinimumHeight(160)
         units_layout.addWidget(self.units_scroll)
-        type_row, self.case_type_buttons = self._make_case_type_row()
-        units_layout.addWidget(type_row)
         right.addWidget(units_box)
 
         save_btn = QPushButton("💾 ENREGISTRER LE CAS")
@@ -518,10 +523,52 @@ class MainWindow(QMainWindow):
         return page
 
     def _unit_entries(self) -> list:
-        """Liste (emoji, nom) des unités + « Collection perso » en dernier."""
-        entries = [(u.get("emoji", ""), u["name"]) for u in bootstrap.load_units(self.settings.shared_root)]
-        entries.append((PERSONAL_EMOJI, PERSONAL_UNIT))
-        return entries
+        """Liste (emoji, nom) des unités du vocabulaire partagé."""
+        return [(u.get("emoji", ""), u["name"]) for u in bootstrap.load_units(self.settings.shared_root)]
+
+    def _make_visibility_row(self):
+        """Ligne de boutons radio « Public / Privé » (choix exclusif)."""
+        container = QWidget()
+        row = QHBoxLayout(container)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Visibilité :"))
+        buttons = {}
+        group = QButtonGroup(container)
+        group.setExclusive(True)
+        choices = (
+            (storage.VISIBILITY_PUBLIC, "👥 Public",
+             "Visible par tous dans la recherche."),
+            (storage.VISIBILITY_PRIVATE, "👤 Privé",
+             "N'apparaît dans la recherche que pour son auteur."),
+        )
+        for value, label, tip in choices:
+            radio = QRadioButton(label)
+            radio.setToolTip(tip)
+            radio.setProperty("visibility", value)
+            buttons[value] = radio
+            group.addButton(radio)
+            row.addWidget(radio)
+            if value == storage.VISIBILITY_PUBLIC:
+                radio.setChecked(True)
+        row.addStretch()
+        return container, buttons
+
+    @staticmethod
+    def _radio_value(buttons: dict) -> str:
+        """Valeur du bouton radio coché (défaut : public)."""
+        for value, radio in buttons.items():
+            if radio.isChecked():
+                return value
+        return storage.VISIBILITY_PUBLIC
+
+    def selected_visibility(self) -> str:
+        return self._radio_value(self.visibility_buttons)
+
+    def reset_visibility(self) -> None:
+        """Ramène le choix de visibilité à « Public » (défaut)."""
+        radio = self.visibility_buttons.get(storage.VISIBILITY_PUBLIC)
+        if radio is not None:
+            radio.setChecked(True)
 
     def _make_case_type_row(self):
         """Ligne de boutons radio pour le type de cas (choix exclusif)."""
@@ -602,18 +649,16 @@ class MainWindow(QMainWindow):
     def clear_image(self) -> None:
         self.current_image = None
         self.preview.clear()
-        self.preview.setText("Aucune image.\nL'image du presse-papiers est importée à l'activation,\nou cliquez sur « Coller l'image du presse-papiers ».")
+        self.preview.setText("Aucune image.\n⚠️ Une image est obligatoire pour enregistrer.\nL'image du presse-papiers est importée à l'activation,\nou cliquez sur « Coller l'image du presse-papiers ».")
         self.clipboard_hint.setText("")
 
     def selected_units(self) -> list[str]:
         return [cb.property("unit_name") for cb in self.unit_checkboxes if cb.isChecked()]
 
-    def _units_summary(self, units: list) -> tuple:
-        """Résume les unités : texte avec emoji (hors perso) + présence perso."""
+    def _units_summary(self, units: list) -> str:
+        """Résume les unités sélectionnées, avec leur emoji."""
         emoji_map = {u["name"]: u.get("emoji", "") for u in bootstrap.load_units(self.settings.shared_root)}
-        real = [u for u in units if u != PERSONAL_UNIT]
-        text = "\n".join((f"{emoji_map.get(u, '')} {u}").strip() for u in real)
-        return text, (PERSONAL_UNIT in units)
+        return "\n".join((f"{emoji_map.get(u, '')} {u}").strip() for u in units)
 
     def save_case(self) -> None:
         title = self.title_input.text().strip()
@@ -621,19 +666,26 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Validation", "Le titre du cas est obligatoire.")
             return
         units = self.selected_units()
-        if not any(u != PERSONAL_UNIT for u in units):
+        if not units:
+            QMessageBox.warning(
+                self, "Validation", "Sélectionnez au moins une unité.",
+            )
+            return
+        if self.current_image is None:
             QMessageBox.warning(
                 self, "Validation",
-                "Sélectionnez au moins une unité (la collection personnelle seule ne suffit pas).",
+                "Une image est obligatoire : copiez une image dans le presse-papiers "
+                "(ou cliquez sur « Coller l'image du presse-papiers ») avant d'enregistrer.",
             )
             return
 
         description = self.description_input.toPlainText()
-        units_text, personal = self._units_summary(units)
+        units_text = self._units_summary(units)
         case_type = self.selected_case_type()
+        visibility = self.selected_visibility()
         dialog = ConfirmCaseDialog(
             self, title=title, description=description,
-            units_text=units_text, personal_selected=personal, case_type=case_type,
+            units_text=units_text, visibility=visibility, case_type=case_type,
             image=self.current_image,
         )
         if dialog.exec() != QDialog.Accepted:
@@ -648,13 +700,15 @@ class MainWindow(QMainWindow):
                 image=self.current_image,
                 shared_root=self.settings.shared_root,
                 case_type=case_type,
+                visibility=visibility,
             )
         except Exception as exc:  # noqa: BLE001 (message clair à l'utilisateur)
             QMessageBox.critical(self, "Échec de l'enregistrement", str(exc))
             return
 
         self.clear_case_fields()
-        self.reset_case_type()  # le type revient à « Standard » pour le prochain cas
+        self.reset_case_type()   # le type revient à « Standard » pour le prochain cas
+        self.reset_visibility()  # la visibilité revient à « Public »
         self._toast.show_message(f"✅ Cas « {case.title} » enregistré.")
 
     def clear_case_fields(self) -> None:
@@ -664,13 +718,29 @@ class MainWindow(QMainWindow):
         self.clear_image()
 
     def clear_form(self) -> None:
-        """Vide tout le formulaire, y compris les coches d'unités mémorisées."""
+        """Vide tout le formulaire, y compris les coches d'unités mémorisées.
+
+        Demande confirmation, car l'action réinitialise aussi la sélection
+        d'unités mémorisée localement.
+        """
+        answer = QMessageBox.question(
+            self,
+            "Effacer le formulaire",
+            "Effacer tout le formulaire ?\n\n"
+            "Titre, description et image seront vidés, et la sélection d'unités "
+            "mémorisée sera réinitialisée.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
         self.clear_case_fields()
         for cb in getattr(self, "unit_checkboxes", []):
             cb.blockSignals(True)
             cb.setChecked(False)
             cb.blockSignals(False)
         self.reset_case_type()
+        self.reset_visibility()
         self.settings.last_units = []
         config.save_settings(self.settings)
 
@@ -702,7 +772,7 @@ class MainWindow(QMainWindow):
 
         # Colonne gauche : aperçu de l'image.
         left = QVBoxLayout()
-        left.addWidget(QLabel("<h3>Image du cas</h3>"))
+        left.addWidget(QLabel("<h3>Image du cas (obligatoire)</h3>"))
         self.edit_preview = QLabel("Aucune image.")
         self.edit_preview.setAlignment(Qt.AlignCenter)
         self.edit_preview.setAttribute(Qt.WA_StyledBackground, True)
@@ -717,6 +787,10 @@ class MainWindow(QMainWindow):
         clear_img_btn = QPushButton("Retirer l'image")
         clear_img_btn.clicked.connect(self.edit_clear_image)
         left.addWidget(clear_img_btn)
+
+        visibility_row, self.edit_visibility_buttons = self._make_visibility_row()
+        left.addWidget(visibility_row)
+
         left.addStretch()
         content.addLayout(left, 1)
 
@@ -765,6 +839,7 @@ class MainWindow(QMainWindow):
         self.edit_description_input.setPlainText(case.description)
         self._reload_edit_units(case.units)
         self._set_edit_case_type(case.case_type)
+        self._set_edit_visibility(case.visibility)
         self.edit_image_source = case.image_path if case.image else None
         self.edit_image_changed = False
         self._edit_update_preview()
@@ -779,6 +854,17 @@ class MainWindow(QMainWindow):
             if radio.isChecked():
                 return name
         return bootstrap.DEFAULT_CASE_TYPE
+
+    def _set_edit_visibility(self, value: str) -> None:
+        radio = (
+            self.edit_visibility_buttons.get(value)
+            or self.edit_visibility_buttons.get(storage.VISIBILITY_PUBLIC)
+        )
+        if radio is not None:
+            radio.setChecked(True)
+
+    def selected_edit_visibility(self) -> str:
+        return self._radio_value(self.edit_visibility_buttons)
 
     def _reload_edit_units(self, selected: list) -> None:
         while self.edit_units_layout.count():
@@ -832,6 +918,16 @@ class MainWindow(QMainWindow):
     def selected_edit_units(self) -> list[str]:
         return [cb.property("unit_name") for cb in getattr(self, "edit_unit_checkboxes", []) if cb.isChecked()]
 
+    def _edit_has_image(self, image_arg) -> bool:
+        """Vrai si le cas édité aura une image après enregistrement.
+
+        ``KEEP_IMAGE`` → on se base sur l'image existante du cas ; ``None`` → image
+        retirée ; toute autre valeur (QImage) → nouvelle image fournie.
+        """
+        if image_arg is storage.KEEP_IMAGE:
+            return bool(self._editing_case and self._editing_case.image)
+        return image_arg is not None
+
     def save_edit(self) -> None:
         if self._editing_case is None:
             return
@@ -840,20 +936,25 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Validation", "Le titre du cas est obligatoire.")
             return
         units = self.selected_edit_units()
-        if not any(u != PERSONAL_UNIT for u in units):
-            QMessageBox.warning(
-                self, "Validation",
-                "Sélectionnez au moins une unité (la collection personnelle seule ne suffit pas).",
-            )
+        if not units:
+            QMessageBox.warning(self, "Validation", "Sélectionnez au moins une unité.")
             return
 
         image_arg = self.edit_image_source if self.edit_image_changed else storage.KEEP_IMAGE
+        if not self._edit_has_image(image_arg):
+            QMessageBox.warning(
+                self, "Validation",
+                "Une image est obligatoire : copiez une image dans le presse-papiers "
+                "(ou cliquez sur « Coller l'image du presse-papiers ») avant d'enregistrer.",
+            )
+            return
         description = self.edit_description_input.toPlainText()
-        units_text, personal = self._units_summary(units)
+        units_text = self._units_summary(units)
         case_type = self.selected_edit_case_type()
+        visibility = self.selected_edit_visibility()
         dialog = ConfirmCaseDialog(
             self, title=title, description=description,
-            units_text=units_text, personal_selected=personal, case_type=case_type,
+            units_text=units_text, visibility=visibility, case_type=case_type,
             image=self._edit_image_qimage(), heading="Confirmer les modifications",
         )
         if dialog.exec() != QDialog.Accepted:
@@ -868,6 +969,7 @@ class MainWindow(QMainWindow):
                 image=image_arg,
                 shared_root=self.settings.shared_root,
                 case_type=case_type,
+                visibility=visibility,
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Échec de la modification", str(exc))
@@ -921,6 +1023,14 @@ class MainWindow(QMainWindow):
         self.search_author = QLineEdit()
         self.search_author.setPlaceholderText("Auteur…")
         self.search_author.returnPressed.connect(self.run_search)
+
+        # --- Collection : publique, ma collection privée, ou les deux ---
+        self.search_visibility = QComboBox()
+        self.search_visibility.setToolTip("Restreindre la recherche à une collection.")
+        self.search_visibility.addItem("👥 Publique", storage.VISIBILITY_PUBLIC)
+        self.search_visibility.addItem("👤 Privé", storage.VISIBILITY_PRIVATE)
+        self.search_visibility.addItem("👥/👤 Public + Privé", None)
+        self.search_visibility.currentIndexChanged.connect(self._maybe_search_visibility)
 
         # --- Unités : bouton qui ouvre la liste multi-choix en popup ---
         self.units_button = QPushButton()
@@ -999,13 +1109,14 @@ class MainWindow(QMainWindow):
         buttons_layout.addWidget(export_btn)
         buttons_layout.addStretch()
 
-        # Grille 2×2 : Texte/Auteur puis Unités/Période ; boutons en dessous.
-        grid.addWidget(labeled("Texte :", self.search_text), 0, 0)
-        grid.addWidget(labeled("Auteur :", self.search_author), 0, 1)
-        grid.addWidget(labeled("Unités :", self.units_button), 1, 0)
-        grid.addWidget(labeled("Période :", self.period_button), 1, 1)
-        grid.addWidget(buttons_row, 2, 0, 1, 2)
-        grid.addWidget(self.free_date_row, 3, 0, 1, 2)
+        # Texte sur toute la largeur ; puis Auteur + Collection ; puis Unités/Période.
+        grid.addWidget(labeled("Texte :", self.search_text), 0, 0, 1, 2)
+        grid.addWidget(labeled("Auteur :", self.search_author), 1, 0)
+        grid.addWidget(labeled("Collection :", self.search_visibility), 1, 1)
+        grid.addWidget(labeled("Unités :", self.units_button), 2, 0)
+        grid.addWidget(labeled("Période :", self.period_button), 2, 1)
+        grid.addWidget(buttons_row, 3, 0, 1, 2)
+        grid.addWidget(self.free_date_row, 4, 0, 1, 2)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
 
@@ -1074,6 +1185,17 @@ class MainWindow(QMainWindow):
         """Unités cochées dans le filtre de recherche."""
         return [cb.property("unit_name") for cb in self.filter_unit_checkboxes if cb.isChecked()]
 
+    def selected_search_visibility(self):
+        """Collection visée : ``"public"``, ``"private"`` ou ``None`` (les deux)."""
+        return self.search_visibility.currentData()
+
+    def _maybe_search_visibility(self, _index: int) -> None:
+        """Relance la recherche au changement de collection."""
+        # Pendant la construction de l'onglet, la liste de résultats n'existe
+        # pas encore : on ignore le signal initial.
+        if hasattr(self, "results_list"):
+            self.run_search()
+
     def toggle_all_filter_units(self) -> None:
         """Coche tout, ou décoche tout (selon l'état courant)."""
         boxes = self.filter_unit_checkboxes
@@ -1086,7 +1208,7 @@ class MainWindow(QMainWindow):
 
     def reload_filter_authors(self) -> None:
         """Autocomplétion du champ Auteur à partir des auteurs existants."""
-        authors = storage.all_authors(self.settings.shared_root)
+        authors = storage.all_authors(self.settings.shared_root, viewer=self.settings.user_name)
         completer = QCompleter(authors, self)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)          # « contient » le mot tapé
@@ -1209,6 +1331,8 @@ class MainWindow(QMainWindow):
                 units=units or None,
                 date_from=date_from,
                 date_to=date_to,
+                viewer=self.settings.user_name,
+                visibility=self.selected_search_visibility(),
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Erreur de recherche", str(exc))
@@ -1218,10 +1342,16 @@ class MainWindow(QMainWindow):
         self.detail.clear()
         self.case_image.clear_source()
         self._results = {}
+        emoji_map = {u["name"]: u.get("emoji", "") for u in bootstrap.load_units(self.settings.shared_root)}
         for case in cases:
             label = f"{case.title} – {case.date_added}  ({case.author})"
+            if case.visibility == storage.VISIBILITY_PRIVATE:
+                label = "👤 " + label
             if case.units:
-                label += f"  [{', '.join(case.units)}]"
+                units_txt = ", ".join(
+                    (f"{emoji_map.get(u, '')} {u}").strip() for u in case.units
+                )
+                label += f"  [{units_txt}]"
             item = QListWidgetItem(label)
             self.results_list.addItem(item)
             self._results[id(item)] = case
@@ -1232,8 +1362,11 @@ class MainWindow(QMainWindow):
         self.search_author.clear()
         for cb in self.filter_unit_checkboxes:
             cb.setChecked(False)
+        self.search_visibility.blockSignals(True)  # évite une recherche intermédiaire
+        self.search_visibility.setCurrentIndex(0)  # « Publique »
+        self.search_visibility.blockSignals(False)
         self._select_period(self.default_period)
-        self.run_search()  # revient à la vue par défaut (« Cette semaine »)
+        self.run_search()  # revient à la vue par défaut (« Cette semaine », publique)
 
     def export_results(self) -> None:
         """Exporte les résultats affichés dans un fichier CSV."""
@@ -1254,7 +1387,7 @@ class MainWindow(QMainWindow):
         if not path.lower().endswith(".csv"):
             path += ".csv"
 
-        header = ["Titre", "Type", "Date d'ajout", "Date de modification",
+        header = ["Titre", "Type", "Visibilité", "Date d'ajout", "Date de modification",
                   "Auteur", "Unités", "Image", "Dossier", "Description"]
         try:
             # utf-8-sig : accents corrects dans Excel ; ';' : séparateur Excel FR.
@@ -1265,6 +1398,7 @@ class MainWindow(QMainWindow):
                     writer.writerow([
                         case.title,
                         case.case_type,
+                        "Privé" if case.visibility == storage.VISIBILITY_PRIVATE else "Public",
                         case.date_added,
                         case.date_modified or "",
                         case.author,
