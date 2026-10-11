@@ -111,5 +111,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,               # remplacer par "icon.ico" si une icône est fournie
+    icon="icone_radcasemanager.ico",
 )
