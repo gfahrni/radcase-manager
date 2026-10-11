@@ -69,7 +69,15 @@ fenêtrée, `console=False`, exclusion des gros modules Qt inutilisés).
 
 Le workflow `.github/workflows/build-windows.yml` construit l'exécutable sur un
 runner Windows GitHub et le publie comme artefact téléchargeable. Il s'exécute
-manuellement (onglet *Actions* → *Run workflow*) ou au push d'un tag `v*`.
+manuellement (onglet *Actions* → *Run workflow*) ou au push d'un tag `v*`, auquel
+cas il crée aussi une **release GitHub** avec le `.exe` attaché.
+
+Exemple pour publier une version :
+
+```bash
+git tag -a v3.0 -m "RadCase Manager v3.0"
+git push origin v3.0
+```
 
 ## Structure du projet
 
