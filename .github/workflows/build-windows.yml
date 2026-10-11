@@ -1,0 +1,44 @@
+name: Build Windows portable
+
+# Construit l'exécutable portable Windows sur un runner GitHub (windows-latest)
+# et l'expose comme artefact téléchargeable. Utile pour produire le .exe sans
+# avoir de machine Windows, ou pour automatiser les livraisons.
+#
+# Déclenchement :
+#   - manuel  : onglet « Actions » -> « Build Windows portable » -> Run workflow
+#   - par tag : pousser un tag « v* » (ex: v3.1) construit et joint l'artefact.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: "x64"
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install "pyinstaller>=6.0"
+
+      - name: Construire l'exécutable
+        run: python -m PyInstaller --clean --noconfirm RadCaseManager.spec
+
+      - name: Publier l'artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadCaseManager-windows
+          path: dist/RadCaseManager.exe
+          if-no-files-found: error

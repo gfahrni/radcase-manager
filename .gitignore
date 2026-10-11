@@ -5,6 +5,7 @@ venv/
 build/
 dist/
 *.spec
+!RadCaseManager.spec
 *.db
 settings_data/
 .DS_Store
