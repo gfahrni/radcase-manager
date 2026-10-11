@@ -1,8 +1,9 @@
 """Interface graphique PySide6 de RadCase Manager (V3).
 
-Deux onglets :
-- « Nouveau cas » : collage du presse-papiers + formulaire d'enregistrement.
-- « Consulter »   : recherche multi-critères dans les cas existants.
+Onglets :
+- « Nouveau cas »   : collage du presse-papiers + formulaire d'enregistrement.
+- « Bibliothèque »  : navigation par unités (cas publics / privés).
+- « Recherche Avancée » : recherche multi-critères dans les cas existants.
 """
 from __future__ import annotations
 
@@ -324,6 +325,296 @@ class ConfirmCaseDialog(QDialog):
 
 
 # --------------------------------------------------------------------------- #
+# Navigateur de cas (onglets « Bibliothèque » / « Mes cas »)
+# --------------------------------------------------------------------------- #
+#: Taille des vignettes (image) et largeur d'une carte.
+CARD_IMG_W, CARD_IMG_H = 150, 112
+CARD_W = CARD_IMG_W + 10
+
+
+class CaseBrowserPage(QWidget):
+    """Onglet de navigation : menu d'unités (gauche) + grille de vignettes.
+
+    Le menu de gauche liste « Tous » puis les unités partagées ; la zone
+    principale affiche, triés par titre, les cas de l'unité sélectionnée.
+    Une bascule en bas du menu choisit entre cas **publics** et cas **privés**
+    (ces derniers limités aux cas privés de l'utilisateur courant).
+    """
+
+    def __init__(self, settings: config.Settings, visibility: str, parent: QWidget = None):
+        super().__init__(parent)
+        self.settings = settings
+        self.visibility = visibility
+        self._unit_buttons: dict = {}
+        self._unit_group = QButtonGroup(self)
+        self._unit_group.setExclusive(True)
+        self._selected_unit = None      # None = toutes les unités
+        self._unit_cases: list = []     # cas de l'unité/visibilité courantes
+        self._quick_text = ""           # filtre de recherche rapide (titre)
+        self._card_widgets: list = []   # vignettes actuellement affichées
+        self._empty_label = None        # message si aucun cas
+        self._columns = 0               # colonnes courantes (recalculées au resize)
+        self._build_ui()
+        self.reload_units()
+        self.reload_cases()
+
+    def set_settings(self, settings: config.Settings) -> None:
+        """Met à jour les réglages (dossier partagé/nom) puis rafraîchit la vue."""
+        self.settings = settings
+        self.reload_units()
+        self.reload_cases()
+
+    # --- Construction ----------------------------------------------------- #
+    def _build_ui(self) -> None:
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Colonne gauche (~15 %) : menu des unités (haut) + bascule (bas).
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+
+        # Champ de recherche rapide (filtre instantané des noms de cas).
+        search_wrap = QWidget()
+        search_layout = QVBoxLayout(search_wrap)
+        search_layout.setContentsMargins(6, 6, 6, 6)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Rechercher un cas…")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setToolTip("Filtre instantanément les cas affichés par leur nom.")
+        self.search_input.textChanged.connect(self._on_quick_search)
+        search_layout.addWidget(self.search_input)
+        left_layout.addWidget(search_wrap)
+
+        self.menu_scroll = QScrollArea()
+        self.menu_scroll.setWidgetResizable(True)
+        self.menu_scroll.setFrameShape(QFrame.NoFrame)
+        self.menu_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.menu_container = QWidget()
+        self.menu_layout = QVBoxLayout(self.menu_container)
+        self.menu_layout.setContentsMargins(6, 6, 6, 6)
+        self.menu_layout.setSpacing(2)
+        self.menu_scroll.setWidget(self.menu_container)
+        left_layout.addWidget(self.menu_scroll, 1)
+
+        # Bascule « Cas publics » / « Cas privés », ancrée en bas du menu.
+        switch = QWidget()
+        switch.setAttribute(Qt.WA_StyledBackground, True)
+        switch.setStyleSheet("border-top: 1px solid #444;")
+        switch_layout = QHBoxLayout(switch)
+        switch_layout.setContentsMargins(6, 6, 6, 6)
+        switch_layout.setSpacing(0)
+        self.visibility_group = QButtonGroup(self)
+        self.visibility_group.setExclusive(True)
+        self.visibility_buttons: dict = {}
+        for value, label in (
+            (storage.VISIBILITY_PUBLIC, "👥 Publics"),
+            (storage.VISIBILITY_PRIVATE, "👤 Privés"),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setStyleSheet(
+                "QPushButton{border:1px solid #555; padding:6px 4px; background:transparent;}"
+                "QPushButton:hover{background:#2f2f2f;}"
+                "QPushButton:checked{background:#3a5a8c; color:white; font-weight:bold;}"
+            )
+            button.clicked.connect(lambda _checked, v=value: self._set_visibility(v))
+            self.visibility_group.addButton(button)
+            self.visibility_buttons[value] = button
+            switch_layout.addWidget(button)
+        self.visibility_buttons[self.visibility].setChecked(True)
+        left_layout.addWidget(switch)
+
+        outer.addWidget(left, 15)
+
+        # Zone principale (~85 %) : grille de vignettes, défilable.
+        self.grid_scroll = QScrollArea()
+        self.grid_scroll.setWidgetResizable(True)
+        self.grid_scroll.setFrameShape(QFrame.NoFrame)
+        self.grid_container = QWidget()
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setContentsMargins(12, 12, 12, 12)
+        self.grid_layout.setSpacing(12)
+        self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.grid_scroll.setWidget(self.grid_container)
+        outer.addWidget(self.grid_scroll, 85)
+
+    def reload_units(self) -> None:
+        """Reconstruit le menu des unités (« Tous » en tête) en gardant la sélection."""
+        while self.menu_layout.count():
+            item = self.menu_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for button in list(self._unit_group.buttons()):
+            self._unit_group.removeButton(button)
+
+        self._unit_buttons = {}
+        entries = [
+            (u["name"], f"{u['emoji']}  {u['name']}" if u.get("emoji") else u["name"])
+            for u in bootstrap.load_units(self.settings.shared_root)
+        ]
+        for value, label in entries:
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setStyleSheet(
+                "QPushButton{text-align:left; padding:6px 8px; border:none; border-radius:4px;}"
+                "QPushButton:hover{background:#2f2f2f;}"
+                "QPushButton:checked{background:#3a5a8c; color:white; font-weight:bold;}"
+            )
+            button.clicked.connect(lambda _checked, v=value: self._select_unit(v))
+            self._unit_group.addButton(button)
+            self._unit_buttons[value] = button
+            self.menu_layout.addWidget(button)
+        self.menu_layout.addStretch()
+
+        # Sélection : on conserve l'unité courante si elle existe encore.
+        if self._selected_unit is not None and self._selected_unit not in self._unit_buttons:
+            self._selected_unit = None
+        if self._selected_unit is not None:
+            self._unit_buttons[self._selected_unit].setChecked(True)
+
+    def _select_unit(self, value) -> None:
+        """Sélectionne une unité ; re-cliquer dessus revient à « toutes les unités »."""
+        if value == self._selected_unit:
+            self._selected_unit = None
+            self._unit_group.setExclusive(False)  # permet de tout décocher
+            for button in self._unit_group.buttons():
+                button.setChecked(False)
+            self._unit_group.setExclusive(True)
+        else:
+            self._selected_unit = value
+        self.reload_cases()
+
+    def _set_visibility(self, value: str) -> None:
+        """Bascule entre cas publics et privés, puis recharge la grille."""
+        button = self.visibility_buttons.get(value)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)  # synchronise l'état visuel (ex : appel par code)
+        if value == self.visibility:
+            return
+        self.visibility = value
+        self.reload_cases()
+
+    def reload_cases(self) -> None:
+        """Recharge la liste (visibilité + unité) puis applique la recherche rapide."""
+        try:
+            cases = storage.search_cases(
+                self.settings.shared_root,
+                viewer=self.settings.user_name,
+                visibility=self.visibility,
+            )
+        except Exception:  # noqa: BLE001 (vue best-effort)
+            cases = []
+
+        unit = self._selected_unit
+        self._unit_cases = (
+            [case for case in cases if unit in case.units] if unit is not None else cases
+        )
+        self._refresh_grid()
+
+    def _on_quick_search(self, text: str) -> None:
+        """Filtre instantanément les cas affichés selon le nom saisi."""
+        self._quick_text = text or ""
+        self._refresh_grid()
+
+    def _refresh_grid(self) -> None:
+        """Applique le filtre de recherche rapide et reconstruit la grille."""
+        needle = self._quick_text.strip().casefold()
+        cases = [
+            case for case in self._unit_cases
+            if not needle or needle in case.title.casefold()
+        ]
+        cases.sort(key=lambda case: case.title.casefold())
+
+        # Supprime les widgets précédents (vignettes ou message vide).
+        self._clear_grid()
+        for widget in self._card_widgets:
+            widget.deleteLater()
+        self._card_widgets = []
+        if self._empty_label is not None:
+            self._empty_label.deleteLater()
+            self._empty_label = None
+
+        if cases:
+            self._card_widgets = [self._make_card(case) for case in cases]
+        else:
+            empty = QLabel("Aucun cas à afficher.")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet("color:#888; padding:24px;")
+            self._empty_label = empty
+        self._layout_cards(force=True)
+
+    def _clear_grid(self) -> None:
+        """Détache tous les widgets de la grille (sans les détruire)."""
+        while self.grid_layout.count():
+            self.grid_layout.takeAt(0)
+
+    def _columns_for_width(self) -> int:
+        """Nombre de vignettes par ligne selon la largeur horizontale disponible."""
+        viewport = self.grid_scroll.viewport().width()
+        margins = self.grid_layout.contentsMargins()
+        spacing = self.grid_layout.spacing()
+        usable = viewport - margins.left() - margins.right()
+        return max(1, (usable + spacing) // (CARD_W + spacing))
+
+    def _layout_cards(self, *, force: bool = False) -> None:
+        """Replace les vignettes selon le nombre de colonnes courant."""
+        columns = self._columns_for_width()
+        if not force and columns == self._columns and self._card_widgets:
+            return  # rien à replacer : même largeur et des vignettes présentes
+        self._columns = columns
+        self._clear_grid()
+        if self._empty_label is not None:
+            self.grid_layout.addWidget(self._empty_label, 0, 0, 1, columns)
+            return
+        for i, widget in enumerate(self._card_widgets):
+            self.grid_layout.addWidget(widget, i // columns, i % columns)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        super().resizeEvent(event)
+        if hasattr(self, "grid_scroll"):
+            self._layout_cards()
+
+    @staticmethod
+    def _make_card(case: storage.Case) -> QFrame:
+        """Vignette d'un cas : image + titre (sous l'image)."""
+        card = QFrame()
+        card.setFixedWidth(CARD_W)
+        card.setToolTip(case.title)
+        column = QVBoxLayout(card)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(4)
+
+        thumb = QLabel()
+        thumb.setFixedSize(CARD_IMG_W, CARD_IMG_H)
+        thumb.setAlignment(Qt.AlignCenter)
+        thumb.setAttribute(Qt.WA_StyledBackground, True)
+        thumb.setStyleSheet("background-color: black;")
+        pixmap = QPixmap(str(case.image_path)) if case.image_path else QPixmap()
+        if pixmap.isNull():
+            thumb.setText("—")
+            thumb.setStyleSheet("background-color:#1e1e1e; color:#777;")
+        else:
+            thumb.setPixmap(
+                pixmap.scaled(CARD_IMG_W, CARD_IMG_H, Qt.KeepAspectRatio,
+                              Qt.SmoothTransformation)
+            )
+        column.addWidget(thumb, 0, Qt.AlignHCenter)
+
+        title = QLabel(case.title)
+        title.setWordWrap(True)
+        title.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        title.setFixedWidth(CARD_W)
+        column.addWidget(title)
+        return card
+
+
+# --------------------------------------------------------------------------- #
 # Fenêtre principale
 # --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
@@ -338,7 +629,11 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.new_case_tab_index = self.tabs.addTab(self._build_new_case_tab(), "➕ Nouveau cas")
-        self.consult_tab_index = self.tabs.addTab(self._build_consult_tab(), "🔎 Rechercher")
+        # Onglet de navigation « Bibliothèque » : menu d'unités (gauche) + grille
+        # de vignettes. La bascule en bas du menu choisit cas publics / privés.
+        self.browser = CaseBrowserPage(settings, storage.VISIBILITY_PUBLIC)
+        self.public_list_tab_index = self.tabs.addTab(self.browser, "📖 Bibliothèque")
+        self.consult_tab_index = self.tabs.addTab(self._build_consult_tab(), "🔎 Recherche Avancée")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
         self.edit_page = None          # construit à la demande
@@ -401,6 +696,9 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index: int) -> None:
         if index == self.new_case_tab_index:
             self._sync_clipboard(overwrite=False)
+        elif index == self.public_list_tab_index:
+            self.browser.reload_units()
+            self.browser.reload_cases()
         elif index == self.consult_tab_index:
             self.reload_filter_authors()
             # Affiche par défaut une recherche vide sur la période par défaut.
@@ -1493,6 +1791,7 @@ class MainWindow(QMainWindow):
             self.reload_units()
             self.reload_filter_units()
             self.reload_filter_authors()
+            self.browser.set_settings(self.settings)
             self._update_status()
 
 
