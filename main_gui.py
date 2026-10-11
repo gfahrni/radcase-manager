@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import csv
 import sys
+from pathlib import Path
 
-from PySide6.QtCore import QDate, QEvent, QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QDate, QEvent, QFileInfo, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QIcon, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFileIconProvider,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -1360,8 +1362,57 @@ class MainWindow(QMainWindow):
             self._update_status()
 
 
+def _app_icon() -> QIcon:
+    """Icône de l'application (barre de titre + barre des tâches).
+
+    - binaire « frozen » : l'icône ``.ico`` est embarquée par PyInstaller via
+      ``datas`` et extraite dans ``sys._MEIPASS`` (mode « onefile ») ;
+    - en développement : fichier ``icone_radcasemanager.ico`` à la racine ;
+    - en dernier recours (Windows), l'icône gravée dans l'exécutable est lue
+      directement, sans dépendre d'un fichier livré à côté.
+    """
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "icone_radcasemanager.ico")
+    candidates.append(Path(__file__).resolve().parent / "icone_radcasemanager.ico")
+
+    for path in candidates:
+        if path.exists():
+            icon = QIcon(str(path))
+            if not icon.isNull():
+                return icon
+
+    if sys.platform == "win32" and getattr(sys, "executable", ""):
+        icon = QFileIconProvider().icon(QFileInfo(sys.executable))
+        if not icon.isNull():
+            return icon
+    return QIcon()
+
+
+def _set_windows_app_id() -> None:
+    """Identifiant d'application Windows pour la barre des tâches.
+
+    Sans cela, Windows peut regrouper la fenêtre sous une icône générique (ou
+    sous celle d'un raccourci épinglé) plutôt que sous celle de l'exécutable.
+    À appeler avant la création de toute fenêtre.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "RadCaseManager.App"
+        )
+    except Exception:
+        pass
+
+
 def main() -> int:
+    _set_windows_app_id()
     app = QApplication(sys.argv)
+    app.setWindowIcon(_app_icon())
 
     settings = config.load_settings()
     if not settings.is_configured:

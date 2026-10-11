@@ -79,8 +79,8 @@ cas il crée aussi une **release GitHub** avec le `.exe` attaché.
 Exemple pour publier une version :
 
 ```bash
-git tag -a v3.0 -m "RadCase Manager v3.0"
-git push origin v3.0
+git tag -a v3.2 -m "RadCase Manager v3.2"
+git push origin v3.2
 ```
 
 ## Structure du projet

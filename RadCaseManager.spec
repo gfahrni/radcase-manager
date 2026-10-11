@@ -80,7 +80,10 @@ a = Analysis(
     ["main_gui.py"],
     pathex=pathex,
     binaries=[],
-    datas=[],
+    # L'icône est embarquée dans le binaire : en mode « onefile », elle est
+    # extraite dans ``sys._MEIPASS`` et chargée au démarrage par
+    # ``main_gui._app_icon()`` (barre de titre + barre des tâches).
+    datas=[("icone_radcasemanager.ico", ".")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
