@@ -6,13 +6,17 @@ name: Build Windows portable
 #
 # Déclenchement :
 #   - manuel  : onglet « Actions » -> « Build Windows portable » -> Run workflow
-#   - par tag : pousser un tag « v* » (ex: v3.1) construit et joint l'artefact.
+#   - par tag : pousser un tag « v* » (ex: v3.0) construit, joint l'artefact
+#               ET crée une release GitHub avec le .exe attaché.
 
 on:
   workflow_dispatch:
   push:
     tags:
       - "v*"
+
+permissions:
+  contents: write   # nécessaire pour créer la release Git
 
 jobs:
   build:
@@ -42,3 +46,13 @@ jobs:
           name: RadCaseManager-windows
           path: dist/RadCaseManager.exe
           if-no-files-found: error
+
+      - name: Créer la release GitHub (tags uniquement)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          dist/RadCaseManager.exe
+          --title "RadCase Manager ${{ github.ref_name }}"
+          --generate-notes
