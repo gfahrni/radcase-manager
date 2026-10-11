@@ -32,6 +32,8 @@ DEFAULT_SETTINGS = {
     "user_name": "",
     "shared_root": "",
     "last_units": [],
+    "last_browser_unit": "",
+    "feed_units": None,
 }
 
 
@@ -42,6 +44,10 @@ class Settings:
     user_name: str = ""
     shared_root: str = ""
     last_units: list = field(default_factory=list)
+    #: Dernière unité sélectionnée dans l'onglet « Bibliothèque » ("" = toutes).
+    last_browser_unit: str = ""
+    #: Unités suivies dans le « Fil d'actualité » (``None`` = tout coché par défaut).
+    feed_units: list | None = None
 
     @property
     def is_configured(self) -> bool:

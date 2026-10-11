@@ -2,6 +2,7 @@
 
 Onglets :
 - « Nouveau cas »   : collage du presse-papiers + formulaire d'enregistrement.
+- « Fil d'actualité » : flux des derniers cas (contenu à venir).
 - « Bibliothèque »  : navigation par unités (cas publics / privés).
 - « Recherche Avancée » : recherche multi-critères dans les cas existants.
 """
@@ -52,6 +53,10 @@ import storage
 
 PREVIEW_W, PREVIEW_H = 400, 320
 
+#: Icône de l'onglet « Fil d'actualité » : ⚪ (blanc) = aucun nouveau cas.
+#: Devient 🔵 (bleu) quand du nouveau sera détecté.
+FEED_DOT_EMOJI = "⚪"
+
 
 # --------------------------------------------------------------------------- #
 # Réglages (/première exécution)
@@ -96,10 +101,13 @@ class SettingsDialog(QDialog):
             self.folder_input.setText(chosen)
 
     def result_settings(self) -> config.Settings:
+        initial = getattr(self, "_initial", config.Settings())
         return config.Settings(
             user_name=self.name_input.text().strip(),
             shared_root=self.folder_input.text().strip(),
-            last_units=list(getattr(self, "_initial", config.Settings()).last_units),
+            last_units=list(initial.last_units),
+            last_browser_unit=initial.last_browser_unit,
+            feed_units=initial.feed_units,
         )
 
     def accept(self) -> None:  # noqa: D102
@@ -331,6 +339,28 @@ class ConfirmCaseDialog(QDialog):
 CARD_IMG_W, CARD_IMG_H = 150, 112
 CARD_W = CARD_IMG_W + 10
 
+#: Dimensions du « Fil d'actualité » (cartes larges, type réseau social).
+FEED_CARD_W = 620
+FEED_IMG_W, FEED_IMG_H = 580, 400
+
+#: Ancrages temporels du fil : (libellé, décalage). J = jours, M = mois, A = ans.
+#: Cliquer un ancrage relance le fil à partir de cet instant (remontée vers le passé).
+FEED_ANCHORS = [
+    ("Aujourd'hui", {}),
+    ("J-1", {"days": 1}),
+    ("J-3", {"days": 3}),
+    ("J-7", {"days": 7}),
+    ("J-30", {"days": 30}),
+    ("M-3", {"months": 3}),
+    ("M-6", {"months": 6}),
+    ("A-1", {"years": 1}),
+    ("A-2", {"years": 2}),
+    ("A-5", {"years": 5}),
+]
+
+#: Jours en français : table manuelle (évite les aléas de locale, surtout Windows).
+_JOURS_FR = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+
 
 class CaseBrowserPage(QWidget):
     """Onglet de navigation : menu d'unités (gauche) + grille de vignettes.
@@ -472,22 +502,26 @@ class CaseBrowserPage(QWidget):
             self.menu_layout.addWidget(button)
         self.menu_layout.addStretch()
 
-        # Sélection : on conserve l'unité courante si elle existe encore.
-        if self._selected_unit is not None and self._selected_unit not in self._unit_buttons:
-            self._selected_unit = None
+        # Sélection : on restaure l'unité mémorisée dans les réglages locaux.
+        desired = (self.settings.last_browser_unit or "").strip() or None
+        if desired is not None and desired not in self._unit_buttons:
+            desired = None  # unité mémorisée disparue : on revient à « toutes »
+        self._selected_unit = desired
         if self._selected_unit is not None:
             self._unit_buttons[self._selected_unit].setChecked(True)
 
     def _select_unit(self, value) -> None:
-        """Sélectionne une unité ; re-cliquer dessus revient à « toutes les unités »."""
+        """Sélectionne une unité (mémorisée) ; re-cliquer revient à toutes les unités."""
         if value == self._selected_unit:
-            self._selected_unit = None
-            self._unit_group.setExclusive(False)  # permet de tout décocher
-            for button in self._unit_group.buttons():
-                button.setChecked(False)
-            self._unit_group.setExclusive(True)
-        else:
-            self._selected_unit = value
+            value = None  # re-clic sur l'unité courante → toutes les unités
+        self._selected_unit = value
+        self.settings.last_browser_unit = value or ""
+        config.save_settings(self.settings)
+        # État visuel des boutons : un seul coché (ou aucun).
+        self._unit_group.setExclusive(False)
+        for name, button in self._unit_buttons.items():
+            button.setChecked(name == value)
+        self._unit_group.setExclusive(True)
         self.reload_cases()
 
     def _set_visibility(self, value: str) -> None:
@@ -615,6 +649,215 @@ class CaseBrowserPage(QWidget):
 
 
 # --------------------------------------------------------------------------- #
+# Fil d'actualité (zone centrale)
+# --------------------------------------------------------------------------- #
+def _date_label(moment) -> str:
+    """Libellé de jour français, ex. « jeudi 10.10.2028 »."""
+    return f"{_JOURS_FR[moment.weekday()]} {moment.day:02d}.{moment.month:02d}.{moment.year}"
+
+
+class FeedView(QWidget):
+    """Fil chronologique type chat (le plus récent en bas).
+
+    Les cas sont listés du plus ancien (haut) au plus récent (bas) ; la vue se
+    positionne sur l'instant d'ancrage (par défaut : tout en bas). Un séparateur
+    indique le changement de jour. Chaque carte affiche l'image en grand, le
+    titre puis la description.
+    """
+
+    def __init__(self, settings: config.Settings, parent: QWidget = None):
+        super().__init__(parent)
+        self.settings = settings
+
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.container = QWidget()
+        self.vbox = QVBoxLayout(self.container)
+        self.vbox.setContentsMargins(16, 16, 16, 16)
+        self.vbox.setSpacing(16)
+        self.scroll.setWidget(self.container)
+
+        self._pending_scroll_widget = None  # carte d'ancrage à rejoindre
+        self._scroll_pending = False
+        self._scroll_attempts = 0
+        self.scroll.verticalScrollBar().rangeChanged.connect(self._on_range_changed)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.scroll)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        """Repositionne le fil quand l'onglet devient visible (layout prêt)."""
+        super().showEvent(event)
+        QTimer.singleShot(0, self._apply_pending_scroll)
+
+    def _apply_pending_scroll(self) -> None:
+        """Applique l'ancrage ; réessaie tant que la géométrie n'est pas prête."""
+        if not self._scroll_pending:
+            return
+        if self._try_scroll_to_anchor():
+            self._scroll_pending = False
+            return
+        self._scroll_attempts += 1
+        if self._scroll_attempts < 60:  # ~2 s max (le temps que le layout se pose)
+            QTimer.singleShot(30, self._apply_pending_scroll)
+        else:
+            self._scroll_pending = False
+
+    def _on_range_changed(self, _minimum: int, _maximum: int) -> None:
+        """La plage de défilement vient d'être calculée : on applique l'ancrage."""
+        self._apply_pending_scroll()
+
+    def set_settings(self, settings: config.Settings) -> None:
+        self.settings = settings
+
+    def load(self, anchor=None, units=None) -> None:
+        """Reconstruit le fil, du plus ancien (haut) au plus récent (bas).
+
+        ``anchor`` : instant sur lequel se positionner à l'ouverture (tous les cas
+        restent affichés : on remonte pour l'historique) ; ``None`` = le plus
+        récent (bas). ``units`` : unités suivies (``None`` = toutes).
+        """
+        while self.vbox.count():
+            item = self.vbox.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        try:
+            cases = storage.search_cases(
+                self.settings.shared_root,
+                viewer=self.settings.user_name,
+            )
+        except Exception:  # noqa: BLE001 (vue best-effort)
+            cases = []
+
+        if units is not None:
+            wanted = {u.casefold() for u in units}
+            cases = [c for c in cases if wanted & {u.casefold() for u in c.units}]
+
+        cases.sort(key=lambda case: case.date_added)  # ancien (haut) → récent (bas)
+
+        if not cases:
+            empty = QLabel("Aucun cas à afficher.")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet("color:#888; padding:24px;")
+            self.vbox.addWidget(empty)
+            self.vbox.addStretch()
+            self._pending_scroll_widget = None
+            self._scroll_pending = False
+            return
+
+        anchor_iso = anchor.isoformat(timespec="seconds") if anchor else None
+        last_day = None
+        anchor_widget = None
+        for case in cases:
+            day = (case.date_added or "")[:10]
+            if day and day != last_day:
+                last_day = day
+                self.vbox.addWidget(self._date_separator(case), 0, Qt.AlignHCenter)
+            card = self._make_feed_card(case)
+            self.vbox.addWidget(card, 0, Qt.AlignHCenter)
+            # Dernière carte au plus tard à l'instant d'ancrage = point de départ.
+            if anchor_iso and (case.date_added or "") <= anchor_iso:
+                anchor_widget = card
+        self.vbox.addStretch()
+
+        self._pending_scroll_widget = anchor_widget
+        self._scroll_pending = True
+        self._scroll_attempts = 0
+        QTimer.singleShot(0, self._apply_pending_scroll)
+
+    def _try_scroll_to_anchor(self) -> bool:
+        """Amène la carte d'ancrage au bas de la vue (mode chat).
+
+        Retourne ``False`` si la géométrie n'est pas encore positionnée (l'appelant
+        réessaiera).
+        """
+        widget = self._pending_scroll_widget
+        bar = self.scroll.verticalScrollBar()
+        if widget is None:
+            bar.setValue(0)
+            return True
+        y = widget.mapTo(self.container, QPoint(0, 0)).y()
+        if y == 0 or bar.maximum() <= 0:
+            return False  # géométrie et/ou plage pas encore prêtes : on réessaiera
+        target = y + widget.height() - self.scroll.viewport().height()
+        bar.setValue(max(0, min(target, bar.maximum())))
+        return True
+
+    @staticmethod
+    def _date_separator(case: storage.Case) -> QWidget:
+        """Barre de séparation pleine largeur : ligne — jour — ligne."""
+        moment = case.datetime
+        text = _date_label(moment) if moment else (case.date_added or "")[:10]
+
+        container = QWidget()
+        container.setFixedWidth(FEED_CARD_W)
+        row = QHBoxLayout(container)
+        row.setContentsMargins(0, 6, 0, 6)
+        row.setSpacing(12)
+
+        def line() -> QFrame:
+            bar = QFrame()
+            bar.setFrameShape(QFrame.NoFrame)
+            bar.setFixedHeight(1)
+            bar.setStyleSheet("background:#555;")
+            return bar
+
+        label = QLabel(text)
+        label.setStyleSheet("color:#bbb; font-weight:bold;")
+        row.addWidget(line(), 1)
+        row.addWidget(label)
+        row.addWidget(line(), 1)
+        return container
+
+    @staticmethod
+    def _make_feed_card(case: storage.Case) -> QFrame:
+        """Carte du fil : grande image + titre + description (légende)."""
+        card = QFrame()
+        card.setObjectName("feedCard")
+        card.setAttribute(Qt.WA_StyledBackground, True)
+        card.setStyleSheet("#feedCard{background:#1e1e1e; border-radius:10px;}")
+        card.setFixedWidth(FEED_CARD_W)
+        column = QVBoxLayout(card)
+        column.setContentsMargins(16, 16, 16, 16)
+        column.setSpacing(8)
+
+        image = QLabel()
+        image.setFixedSize(FEED_IMG_W, FEED_IMG_H)
+        image.setAlignment(Qt.AlignCenter)
+        image.setAttribute(Qt.WA_StyledBackground, True)
+        image.setStyleSheet("background:black; border-radius:6px;")
+        pixmap = QPixmap(str(case.image_path)) if case.image_path else QPixmap()
+        if pixmap.isNull():
+            image.setText("—")
+            image.setStyleSheet("background:#111; color:#777; border-radius:6px;")
+        else:
+            image.setPixmap(
+                pixmap.scaled(FEED_IMG_W, FEED_IMG_H, Qt.KeepAspectRatio,
+                              Qt.SmoothTransformation)
+            )
+        column.addWidget(image, 0, Qt.AlignHCenter)
+
+        title = QLabel(case.title)
+        title.setWordWrap(True)
+        title.setFixedWidth(FEED_IMG_W)
+        title.setStyleSheet("font-weight:bold; font-size:15px; color:#fff;")
+        column.addWidget(title)
+
+        description = case.description.strip()
+        if description:
+            body = QLabel(description)
+            body.setWordWrap(True)
+            body.setFixedWidth(FEED_IMG_W)
+            body.setStyleSheet("color:#ddd;")
+            column.addWidget(body)
+        return card
+
+
+# --------------------------------------------------------------------------- #
 # Fenêtre principale
 # --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
@@ -629,6 +872,11 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.new_case_tab_index = self.tabs.addTab(self._build_new_case_tab(), "➕ Nouveau cas")
+        # Onglet « Fil d'actualité » (contenu à venir), juste après la saisie.
+        # La pastille (⚪ par défaut, 🔵 si du nouveau) sert d'icône d'onglet.
+        self.feed_tab_index = self.tabs.addTab(
+            self._build_feed_tab(), f"{FEED_DOT_EMOJI} Fil d'actualité"
+        )
         # Onglet de navigation « Bibliothèque » : menu d'unités (gauche) + grille
         # de vignettes. La bascule en bas du menu choisit cas publics / privés.
         self.browser = CaseBrowserPage(settings, storage.VISIBILITY_PUBLIC)
@@ -668,6 +916,10 @@ class MainWindow(QMainWindow):
             f"Utilisateur : {self.settings.user_name}   |   Dossier : {self.settings.shared_root}"
         )
 
+    def set_feed_dot(self, emoji: str = FEED_DOT_EMOJI) -> None:
+        """Change l'icône de l'onglet « Fil d'actualité » (⚪ défaut, 🔵 si nouveau)."""
+        self.tabs.setTabText(self.feed_tab_index, f"{emoji} Fil d'actualité")
+
     # --- Synchronisation ponctuelle du presse-papiers (activation / onglet) ---
     def changeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
         """Détecte le retour au premier plan de la fenêtre."""
@@ -696,6 +948,8 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index: int) -> None:
         if index == self.new_case_tab_index:
             self._sync_clipboard(overwrite=False)
+        elif index == self.feed_tab_index:
+            self.reload_feed_units()
         elif index == self.public_list_tab_index:
             self.browser.reload_units()
             self.browser.reload_cases()
@@ -735,6 +989,184 @@ class MainWindow(QMainWindow):
             if overwrite else
             "📋 Image détectée dans le presse-papiers (importée automatiquement)."
         )
+
+    # --- Onglet « Fil d'actualité » (contenu à venir) --------------------- #
+    def _build_feed_tab(self) -> QWidget:
+        """Onglet « Fil d'actualité » : menu d'unités suivies (cases à cocher).
+
+        La zone centrale reste vide pour l'instant.
+        """
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Colonne gauche (~15 %) : moitié haute = unités suivies,
+        # moitié basse = navigation dans le temps.
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+
+        # --- Moitié haute : sélection des unités ---
+        top = QWidget()
+        top_layout = QVBoxLayout(top)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(0)
+
+        units_title = QLabel("Sélection des unités")
+        units_title.setStyleSheet("color:#bbb; font-weight:bold; padding:6px 6px 2px 6px;")
+        top_layout.addWidget(units_title)
+
+        # Boutons « tout cocher » puis « tout décocher », juste sous le titre.
+        actions = QWidget()
+        actions_layout = QVBoxLayout(actions)
+        actions_layout.setContentsMargins(6, 2, 6, 6)
+        actions_layout.setSpacing(4)
+        check_all = QPushButton("Tout cocher")
+        check_all.clicked.connect(lambda: self._toggle_feed_units(True))
+        uncheck_all = QPushButton("Tout décocher")
+        uncheck_all.clicked.connect(lambda: self._toggle_feed_units(False))
+        actions_layout.addWidget(check_all)
+        actions_layout.addWidget(uncheck_all)
+        top_layout.addWidget(actions)
+
+        self.feed_units_scroll = QScrollArea()
+        self.feed_units_scroll.setWidgetResizable(True)
+        self.feed_units_scroll.setFrameShape(QFrame.NoFrame)
+        self.feed_units_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.feed_units_container = QWidget()
+        self.feed_units_layout = QVBoxLayout(self.feed_units_container)
+        self.feed_units_layout.setContentsMargins(6, 0, 6, 6)
+        self.feed_units_layout.setSpacing(2)
+        self.feed_units_scroll.setWidget(self.feed_units_container)
+        top_layout.addWidget(self.feed_units_scroll, 1)
+
+        left_layout.addWidget(top, 1)
+
+        # --- Moitié basse : ancrages temporels ---
+        bottom = QWidget()
+        bottom.setAttribute(Qt.WA_StyledBackground, True)
+        bottom.setStyleSheet("border-top: 1px solid #444;")
+        bottom_layout = QVBoxLayout(bottom)
+        bottom_layout.setContentsMargins(6, 6, 6, 6)
+        bottom_layout.setSpacing(4)
+
+        temporalite_title = QLabel("Temporalité")
+        temporalite_title.setStyleSheet("color:#bbb; font-weight:bold; padding:0 0 2px 0;")
+        bottom_layout.addWidget(temporalite_title)
+
+        anchors_scroll = QScrollArea()
+        anchors_scroll.setWidgetResizable(True)
+        anchors_scroll.setFrameShape(QFrame.NoFrame)
+        anchors_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        anchors_container = QWidget()
+        anchors_layout = QVBoxLayout(anchors_container)
+        anchors_layout.setContentsMargins(0, 0, 0, 0)
+        anchors_layout.setSpacing(4)
+        self.feed_anchor_buttons: dict = {}
+        self.feed_anchor_group = QButtonGroup(self)
+        self.feed_anchor_group.setExclusive(True)
+        for name, _params in FEED_ANCHORS:
+            button = QPushButton(name)
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.clicked.connect(lambda _checked, n=name: self._on_feed_anchor(n))
+            self.feed_anchor_group.addButton(button)
+            self.feed_anchor_buttons[name] = button
+            anchors_layout.addWidget(button)
+        anchors_layout.addStretch()
+        anchors_scroll.setWidget(anchors_container)
+        bottom_layout.addWidget(anchors_scroll)
+
+        left_layout.addWidget(bottom, 1)
+
+        layout.addWidget(left, 15)
+
+        # Zone centrale : fil chronologique (le plus récent en bas, mode chat).
+        self.feed_content = QWidget()
+        feed_content_layout = QVBoxLayout(self.feed_content)
+        feed_content_layout.setContentsMargins(0, 0, 0, 0)
+        self.feed_view = FeedView(self.settings)
+        feed_content_layout.addWidget(self.feed_view)
+        layout.addWidget(self.feed_content, 85)
+
+        self.feed_anchor_buttons[FEED_ANCHORS[0][0]].setChecked(True)  # « Aujourd'hui »
+        self.reload_feed_units()
+        return page
+
+    def reload_feed_units(self) -> None:
+        """Recharge les unités suivies (cases à cocher) et restaure la sélection."""
+        while self.feed_units_layout.count():
+            item = self.feed_units_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        remembered = self.settings.feed_units  # None = tout coché par défaut
+        self.feed_unit_checkboxes = []
+        for unit in bootstrap.load_units(self.settings.shared_root):
+            label = f"{unit['emoji']}  {unit['name']}" if unit.get("emoji") else unit["name"]
+            cb = QCheckBox(label)
+            cb.setProperty("unit_name", unit["name"])
+            cb.setChecked(remembered is None or unit["name"] in remembered)
+            cb.toggled.connect(self._remember_feed_units)
+            self.feed_unit_checkboxes.append(cb)
+            self.feed_units_layout.addWidget(cb)
+        self.feed_units_layout.addStretch()
+        self._refresh_feed()
+
+    def selected_feed_units(self) -> list[str]:
+        """Unités suivies actuellement cochées dans le fil."""
+        return [
+            cb.property("unit_name")
+            for cb in getattr(self, "feed_unit_checkboxes", [])
+            if cb.isChecked()
+        ]
+
+    def _remember_feed_units(self) -> None:
+        """Mémorise la sélection d'unités suivies, puis rafraîchit le fil."""
+        self.settings.feed_units = self.selected_feed_units()
+        config.save_settings(self.settings)
+        self._refresh_feed()
+
+    def _toggle_feed_units(self, checked: bool) -> None:
+        """Coche ou décoche toutes les unités suivies."""
+        for cb in getattr(self, "feed_unit_checkboxes", []):
+            cb.blockSignals(True)
+            cb.setChecked(checked)
+            cb.blockSignals(False)
+        self._remember_feed_units()
+
+    def _active_feed_anchor(self) -> str:
+        """Nom de l'ancrage temporel actif (défaut : « Aujourd'hui »)."""
+        for name, button in getattr(self, "feed_anchor_buttons", {}).items():
+            if button.isChecked():
+                return name
+        return FEED_ANCHORS[0][0]
+
+    def _feed_anchor_datetime(self, name: str):
+        """Instant d'ancrage correspondant au bouton de temporalité."""
+        from datetime import datetime, timedelta
+
+        params = dict(FEED_ANCHORS).get(name, {})
+        now = datetime.now()
+        months = params.get("months", 0) + params.get("years", 0) * 12
+        moment = self._shift_months(now, months) if months else now
+        days = params.get("days", 0)
+        if days:
+            moment = moment - timedelta(days=days)
+        return moment
+
+    def _on_feed_anchor(self, _name: str) -> None:
+        """Relance le fil à partir de l'instant d'ancrage choisi."""
+        self._refresh_feed()
+
+    def _refresh_feed(self) -> None:
+        """(Re)charge le fil selon l'ancrage actif et les unités suivies."""
+        if not hasattr(self, "feed_view"):
+            return
+        anchor = self._feed_anchor_datetime(self._active_feed_anchor())
+        self.feed_view.load(anchor, units=self.selected_feed_units())
 
     # --- Onglet « Nouveau cas » ------------------------------------------- #
     def _build_new_case_tab(self) -> QWidget:
@@ -1791,6 +2223,8 @@ class MainWindow(QMainWindow):
             self.reload_units()
             self.reload_filter_units()
             self.reload_filter_authors()
+            self.feed_view.set_settings(self.settings)
+            self.reload_feed_units()
             self.browser.set_settings(self.settings)
             self._update_status()
 
