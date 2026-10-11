@@ -54,8 +54,12 @@ import storage
 PREVIEW_W, PREVIEW_H = 400, 320
 
 #: Icône de l'onglet « Fil d'actualité » : ⚪ (blanc) = aucun nouveau cas.
-#: Devient 🔵 (bleu) quand du nouveau sera détecté.
+#: Devient 🔵 (bleu) quand du nouveau est détecté.
 FEED_DOT_EMOJI = "⚪"
+FEED_DOT_NOTIFY = "🔵"
+
+#: Intervalle de vérification du badge de nouveauté du fil (millisecondes).
+FEED_BADGE_INTERVAL_MS = 5 * 60 * 1000
 
 
 # --------------------------------------------------------------------------- #
@@ -108,6 +112,7 @@ class SettingsDialog(QDialog):
             last_units=list(initial.last_units),
             last_browser_unit=initial.last_browser_unit,
             feed_units=initial.feed_units,
+            feed_last_seen=initial.feed_last_seen,
         )
 
     def accept(self) -> None:  # noqa: D102
@@ -219,6 +224,15 @@ class ImageFrame(QLabel):
 
 class ClickableLabel(QLabel):
     """Étiquette cliquable (ouvre le détail au clic sur une image)."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        self.clicked.emit()
+
+
+class FeedCard(QFrame):
+    """Carte du fil d'actualité (cliquable sur toute sa zone)."""
 
     clicked = Signal()
 
@@ -477,6 +491,10 @@ CARD_W = CARD_IMG_W + 10
 #: Dimensions du « Fil d'actualité » (cartes, type réseau social).
 FEED_CARD_W = 420
 FEED_IMG_W, FEED_IMG_H = 387, 267
+
+#: Fond d'une carte du fil : normal, ou bleu si le cas est « nouveau » (non lu).
+FEED_CARD_BG = "#1e1e1e"
+FEED_CARD_BG_NEW = "#1b3a5c"
 
 #: Ancrages temporels du fil : (libellé, décalage). J = jours, M = mois, A = ans.
 #: Cliquer un ancrage relance le fil à partir de cet instant (remontée vers le passé).
@@ -801,11 +819,14 @@ class FeedView(QWidget):
     Les cas sont listés du plus ancien (haut) au plus récent (bas) ; la vue se
     positionne sur l'instant d'ancrage (par défaut : tout en bas). Un séparateur
     indique le changement de jour. Chaque carte affiche l'image en grand, le
-    titre puis la description.
+    titre puis la description. Les cas « nouveaux » (non lus) ont un fond bleu,
+    qui s'efface dès que la carte devient visible (scroll) ou est cliquée.
     """
 
     #: Émis avec le :class:`storage.Case` quand on clique l'image d'une carte.
     case_activated = Signal(object)
+    #: Émis avec l'identifiant d'un cas lorsqu'une carte passe à « lu ».
+    case_read = Signal(object)
 
     def __init__(self, settings: config.Settings, parent: QWidget = None):
         super().__init__(parent)
@@ -823,7 +844,10 @@ class FeedView(QWidget):
         self._pending_scroll_widget = None  # carte d'ancrage à rejoindre
         self._scroll_pending = False
         self._scroll_attempts = 0
+        self._unread_ids: set = set()       # cas « nouveaux » (fond bleu)
+        self._cards_by_id: dict = {}        # id de cas -> carte
         self.scroll.verticalScrollBar().rangeChanged.connect(self._on_range_changed)
+        self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -840,6 +864,7 @@ class FeedView(QWidget):
             return
         if self._try_scroll_to_anchor():
             self._scroll_pending = False
+            self._mark_visible_read()  # cartes visibles à l'ouverture → lues
             return
         self._scroll_attempts += 1
         if self._scroll_attempts < 60:  # ~2 s max (le temps que le layout se pose)
@@ -854,13 +879,16 @@ class FeedView(QWidget):
     def set_settings(self, settings: config.Settings) -> None:
         self.settings = settings
 
-    def load(self, anchor=None, units=None) -> None:
+    def load(self, anchor=None, units=None, unread_ids=None) -> None:
         """Reconstruit le fil, du plus ancien (haut) au plus récent (bas).
 
         ``anchor`` : instant sur lequel se positionner à l'ouverture (tous les cas
         restent affichés : on remonte pour l'historique) ; ``None`` = le plus
         récent (bas). ``units`` : unités suivies (``None`` = toutes).
+        ``unread_ids`` : identifiants des cas « nouveaux » (carte à fond bleu).
         """
+        self._unread_ids = set(unread_ids or ())
+        self._cards_by_id = {}
         while self.vbox.count():
             item = self.vbox.takeAt(0)
             widget = item.widget()
@@ -901,6 +929,7 @@ class FeedView(QWidget):
                 self.vbox.addWidget(self._date_separator(case), 0, Qt.AlignHCenter)
             card = self._make_feed_card(case)
             self.vbox.addWidget(card, 0, Qt.AlignHCenter)
+            self._cards_by_id[case.id] = card
             # Dernière carte au plus tard à l'instant d'ancrage = point de départ.
             if anchor_iso and (case.date_added or "") <= anchor_iso:
                 anchor_widget = card
@@ -910,6 +939,36 @@ class FeedView(QWidget):
         self._scroll_pending = True
         self._scroll_attempts = 0
         QTimer.singleShot(0, self._apply_pending_scroll)
+
+    # --- Cas « nouveaux » (fond bleu) ------------------------------------- #
+    def _on_scroll(self, _value: int) -> None:
+        """À chaque défilement : marque lues les cartes entrées dans la vue."""
+        self._mark_visible_read()
+
+    def _mark_visible_read(self) -> None:
+        """Marque lues les cartes « nouvelles » qui intersectent la zone visible."""
+        if not self._unread_ids:
+            return
+        bar = self.scroll.verticalScrollBar()
+        top = bar.value()
+        bottom = top + self.scroll.viewport().height()
+        for case_id in list(self._unread_ids):
+            card = self._cards_by_id.get(case_id)
+            if card is None:
+                continue
+            rect = card.geometry()
+            if rect.bottom() > top and rect.top() < bottom:
+                self._mark_read(case_id)
+
+    def _mark_read(self, case_id) -> None:
+        """Passe une carte à « lue » (retire le fond bleu)."""
+        if case_id not in self._unread_ids:
+            return
+        self._unread_ids.discard(case_id)
+        card = self._cards_by_id.get(case_id)
+        if card is not None:
+            self._apply_card_style(card, unread=False)
+        self.case_read.emit(case_id)
 
     def _try_scroll_to_anchor(self) -> bool:
         """Amène la carte d'ancrage au bas de la vue (mode chat).
@@ -957,11 +1016,13 @@ class FeedView(QWidget):
 
     def _make_feed_card(self, case: storage.Case) -> QFrame:
         """Carte du fil : grande image (cliquable) + titre + description (légende)."""
-        card = QFrame()
+        card = FeedCard()
         card.setObjectName("feedCard")
         card.setAttribute(Qt.WA_StyledBackground, True)
-        card.setStyleSheet("#feedCard{background:#1e1e1e; border-radius:10px;}")
         card.setFixedWidth(FEED_CARD_W)
+        card.setCursor(Qt.PointingHandCursor)
+        self._apply_card_style(card, unread=case.id in self._unread_ids)
+        card.clicked.connect(lambda c=case: self._mark_read(c.id))
         column = QVBoxLayout(card)
         column.setContentsMargins(16, 16, 16, 16)
         column.setSpacing(8)
@@ -972,7 +1033,7 @@ class FeedView(QWidget):
         image.setAttribute(Qt.WA_StyledBackground, True)
         image.setCursor(Qt.PointingHandCursor)
         image.setStyleSheet("background:black; border-radius:6px;")
-        image.clicked.connect(lambda c=case: self.case_activated.emit(c))
+        image.clicked.connect(lambda c=case: self._on_image_clicked(c))
         pixmap = QPixmap(str(case.image_path)) if case.image_path else QPixmap()
         if pixmap.isNull():
             image.setText("—")
@@ -999,6 +1060,16 @@ class FeedView(QWidget):
             column.addWidget(body)
         return card
 
+    def _on_image_clicked(self, case: storage.Case) -> None:
+        """Clic sur l'image : marque lu, puis ouvre le zoom détail."""
+        self._mark_read(case.id)
+        self.case_activated.emit(case)
+
+    @staticmethod
+    def _apply_card_style(card: QFrame, *, unread: bool) -> None:
+        background = FEED_CARD_BG_NEW if unread else FEED_CARD_BG
+        card.setStyleSheet(f"#feedCard{{background:{background}; border-radius:10px;}}")
+
 
 # --------------------------------------------------------------------------- #
 # Fenêtre principale
@@ -1009,6 +1080,11 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.current_image: QImage | None = None
         self._results: dict[int, storage.Case] = {}
+
+        # Fil d'actualité : état de session pour la pastille de nouveauté
+        # (défini avant la construction des onglets, qui lit cet état).
+        self._feed_session_watermark = settings.feed_last_seen or ""
+        self._feed_read_ids: set = set()
 
         self.setWindowTitle("RadCase Manager")
         self.setGeometry(120, 120, 980, 680)
@@ -1040,6 +1116,13 @@ class MainWindow(QMainWindow):
 
         self._build_status_bar()
 
+        # Badge de nouveauté du fil : vérification périodique (toutes les 5 min).
+        self._feed_timer = QTimer(self)
+        self._feed_timer.setInterval(FEED_BADGE_INTERVAL_MS)
+        self._feed_timer.timeout.connect(self._update_feed_badge)
+        self._feed_timer.start()
+        self._update_feed_badge()
+
     def _build_status_bar(self) -> None:
         """Barre de statut : rouage (paramètres) + nom d'utilisateur / dossier."""
         self.settings_btn = QToolButton()
@@ -1061,9 +1144,60 @@ class MainWindow(QMainWindow):
             f"Utilisateur : {self.settings.user_name}   |   Dossier : {self.settings.shared_root}"
         )
 
-    def set_feed_dot(self, emoji: str = FEED_DOT_EMOJI) -> None:
-        """Change l'icône de l'onglet « Fil d'actualité » (⚪ défaut, 🔵 si nouveau)."""
-        self.tabs.setTabText(self.feed_tab_index, f"{emoji} Fil d'actualité")
+    def set_feed_dot(self, emoji: str = FEED_DOT_EMOJI, count: int = 0) -> None:
+        """Met à jour l'icône de l'onglet « Fil d'actualité » (et le compteur)."""
+        text = f"{emoji} Fil d'actualité"
+        if count > 0:
+            text += f" ({count})"
+        self.tabs.setTabText(self.feed_tab_index, text)
+
+    def _unread_cases(self) -> list:
+        """Cas du fil « nouveaux » (non lus) pour la session courante.
+
+        Nouveau = visible, dans une unité suivie, plus récent que le filigrane de
+        session, hors mes propres cas, et pas encore lu cette session.
+        """
+        units = self.selected_feed_units()
+        if not units:
+            return []
+        wanted = {u.casefold() for u in units}
+        since = self._feed_session_watermark or ""
+        me = (self.settings.user_name or "").strip().casefold()
+        try:
+            cases = storage.search_cases(
+                self.settings.shared_root, viewer=self.settings.user_name
+            )
+        except Exception:  # noqa: BLE001 (badge best-effort)
+            return []
+        result = []
+        for case in cases:
+            if not (wanted & {u.casefold() for u in case.units}):
+                continue
+            if since and (case.date_added or "") <= since:
+                continue
+            if me and case.author.strip().casefold() == me:
+                continue  # ne pas compter mes propres cas
+            if case.id in self._feed_read_ids:
+                continue
+            result.append(case)
+        return result
+
+    def _on_feed_case_read(self, case_id) -> None:
+        """Une carte vient d'être lue (scroll ou clic) : met à jour le badge."""
+        if case_id and case_id not in self._feed_read_ids:
+            self._feed_read_ids.add(case_id)
+            self._update_feed_badge()
+
+    def _on_feed_case_activated(self, case) -> None:
+        """Clic sur l'image d'une carte : marque lu, puis ouvre le zoom détail."""
+        if case is not None:
+            self._on_feed_case_read(case.id)
+            self._show_case_detail(case)
+
+    def _update_feed_badge(self) -> None:
+        """Pastille = nombre de cartes du fil encore « nouvelles » (non lues)."""
+        count = len(self._unread_cases())
+        self.set_feed_dot(FEED_DOT_NOTIFY if count else FEED_DOT_EMOJI, count)
 
     # --- Synchronisation ponctuelle du presse-papiers (activation / onglet) ---
     def changeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
@@ -1099,7 +1233,13 @@ class MainWindow(QMainWindow):
         if index == self.new_case_tab_index:
             self._sync_clipboard(overwrite=False)
         elif index == self.feed_tab_index:
+            # Soft reset : la prochaine visite ne verra plus ces cas comme nouveaux.
+            from datetime import datetime
+
+            self.settings.feed_last_seen = datetime.now().isoformat(timespec="seconds")
+            config.save_settings(self.settings)
             self.reload_feed_units()
+            self._update_feed_badge()
         elif index == self.public_list_tab_index:
             self.browser.reload_units()
             self.browser.reload_cases()
@@ -1238,7 +1378,8 @@ class MainWindow(QMainWindow):
         feed_content_layout = QVBoxLayout(self.feed_content)
         feed_content_layout.setContentsMargins(0, 0, 0, 0)
         self.feed_view = FeedView(self.settings)
-        self.feed_view.case_activated.connect(self._show_case_detail)
+        self.feed_view.case_activated.connect(self._on_feed_case_activated)
+        self.feed_view.case_read.connect(self._on_feed_case_read)
         feed_content_layout.addWidget(self.feed_view)
         layout.addWidget(self.feed_content, 85)
 
@@ -1279,6 +1420,7 @@ class MainWindow(QMainWindow):
         self.settings.feed_units = self.selected_feed_units()
         config.save_settings(self.settings)
         self._refresh_feed()
+        self._update_feed_badge()
 
     def _toggle_feed_units(self, checked: bool) -> None:
         """Coche ou décoche toutes les unités suivies."""
@@ -1317,7 +1459,10 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "feed_view"):
             return
         anchor = self._feed_anchor_datetime(self._active_feed_anchor())
-        self.feed_view.load(anchor, units=self.selected_feed_units())
+        unread = {case.id for case in self._unread_cases()}
+        self.feed_view.load(
+            anchor, units=self.selected_feed_units(), unread_ids=unread
+        )
 
     # --- Onglet « Nouveau cas » ------------------------------------------- #
     def _build_new_case_tab(self) -> QWidget:

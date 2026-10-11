@@ -34,6 +34,7 @@ DEFAULT_SETTINGS = {
     "last_units": [],
     "last_browser_unit": "",
     "feed_units": None,
+    "feed_last_seen": "",
 }
 
 
@@ -48,6 +49,8 @@ class Settings:
     last_browser_unit: str = ""
     #: Unités suivies dans le « Fil d'actualité » (``None`` = tout coché par défaut).
     feed_units: list | None = None
+    #: Horodatage de la dernière visite du fil (soft reset du badge de nouveauté).
+    feed_last_seen: str = ""
 
     @property
     def is_configured(self) -> bool:
@@ -67,6 +70,13 @@ def load_settings() -> Settings:
     settings = Settings(**{**DEFAULT_SETTINGS, **known})
     if not isinstance(settings.last_units, list):
         settings.last_units = []
+    if not isinstance(settings.feed_last_seen, str):
+        settings.feed_last_seen = ""
+    # Migration douce : ancien suivi « par unité » (feed_seen) -> filigrane global.
+    if not settings.feed_last_seen and isinstance(data.get("feed_seen"), dict):
+        values = [v for v in data["feed_seen"].values() if isinstance(v, str) and v]
+        if values:
+            settings.feed_last_seen = max(values)
     return settings
 
 
