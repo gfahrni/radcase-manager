@@ -30,6 +30,7 @@ DEFAULT_UNITS: List[Dict[str, str]] = [
     {"name": "Cardio-vasculaire", "emoji": "🫀", "description": ""},
     {"name": "Divers", "emoji": "🧩", "description": ""},
     {"name": "Echographie", "emoji": "🌊", "description": ""},
+    {"name": "Gyneco", "emoji": "👩", "description": ""},
     {"name": "Interventionnel", "emoji": "🎯", "description": ""},
     {"name": "Médecine Nucléaire", "emoji": "☢️", "description": ""},
     {"name": "Neuro", "emoji": "🧠", "description": ""},
