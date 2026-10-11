@@ -38,6 +38,19 @@ presse-papiers, dans un **dossier réseau partagé**.
 - Lancer : `python main_gui.py`.
 - Tester le backend sans GUI : voir `README.md`.
 
+## Publication GitHub
+- Dépôt distant : **`gfahrni/radcase-manager`** (branche `main`), public. La
+  connexion passe par la CLI **`gh`** (compte `gfahrni`) : `gh auth setup-git`
+  installe l'aide-mémoire d'identifiants, ensuite `git clone` / `git push`
+  s'authentifient seuls.
+- **Pas de `.git` local** dans le dossier du projet : on pousse la version
+  actuelle depuis un **clone temporaire** du dépôt (synchroniser la racine
+  dedans, puis commit + push sur `main`).
+- Pousser **la racine seule** (fichiers du projet : `*.py`, `*.md`, `.github/`,
+  etc.) ; **jamais `archive/`** (instantanés conservés en local uniquement).
+- **Pas de tag** sauf demande explicite : un tag `v*` déclenche le build Windows
+  (GitHub Actions) et crée une release.
+
 ## Vérifications
 - Après modification d'un `*.py` : `python -m py_compile <fichier>`.
 - PySide6 peut ne pas être installé sur la machine : garder la logique backend
