@@ -865,7 +865,8 @@ class FeedView(QWidget):
     positionne sur l'instant d'ancrage (par défaut : tout en bas). Un séparateur
     indique le changement de jour. Chaque carte affiche l'image en grand, le
     titre puis la description. Les cas « nouveaux » (non lus) ont un fond bleu,
-    qui s'efface dès que la carte devient visible (scroll) ou est cliquée.
+    qui reste tant que la carte est visible : il s'efface quand la carte **sort
+    de l'écran** (défilement passé) ou est cliquée.
     """
 
     #: Émis avec le :class:`storage.Case` quand on clique l'image d'une carte.
@@ -890,6 +891,7 @@ class FeedView(QWidget):
         self._scroll_pending = False
         self._scroll_attempts = 0
         self._unread_ids: set = set()       # cas « nouveaux » (fond bleu)
+        self._seen_ids: set = set()         # cas déjà passés dans la zone visible
         self._cards_by_id: dict = {}        # id de cas -> carte
         self.scroll.verticalScrollBar().rangeChanged.connect(self._on_range_changed)
         self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
@@ -909,7 +911,7 @@ class FeedView(QWidget):
             return
         if self._try_scroll_to_anchor():
             self._scroll_pending = False
-            self._mark_visible_read()  # cartes visibles à l'ouverture → lues
+            self._mark_visible_read()  # mémorise les cartes visibles à l'ouverture
             return
         self._scroll_attempts += 1
         if self._scroll_attempts < 60:  # ~2 s max (le temps que le layout se pose)
@@ -934,6 +936,7 @@ class FeedView(QWidget):
         ``case_types`` : types de cas à afficher (``None`` = tous).
         """
         self._unread_ids = set(unread_ids or ())
+        self._seen_ids = set()
         self._cards_by_id = {}
         while self.vbox.count():
             item = self.vbox.takeAt(0)
@@ -994,7 +997,11 @@ class FeedView(QWidget):
         self._mark_visible_read()
 
     def _mark_visible_read(self) -> None:
-        """Marque lues les cartes « nouvelles » qui intersectent la zone visible."""
+        """Marque lues les cartes « nouvelles » déjà vues puis sorties de l'écran.
+
+        Une carte reste bleue tant qu'elle est visible ; elle passe au gris
+        lorsqu'elle quitte la zone visible (défilement passé).
+        """
         if not self._unread_ids:
             return
         bar = self.scroll.verticalScrollBar()
@@ -1006,13 +1013,16 @@ class FeedView(QWidget):
                 continue
             rect = card.geometry()
             if rect.bottom() > top and rect.top() < bottom:
-                self._mark_read(case_id)
+                self._seen_ids.add(case_id)   # carte (re)vue : on la garde bleue
+            elif case_id in self._seen_ids:
+                self._mark_read(case_id)      # vue puis sortie de l'écran
 
     def _mark_read(self, case_id) -> None:
         """Passe une carte à « lue » (retire le fond bleu)."""
         if case_id not in self._unread_ids:
             return
         self._unread_ids.discard(case_id)
+        self._seen_ids.discard(case_id)
         card = self._cards_by_id.get(case_id)
         if card is not None:
             self._apply_card_style(card, unread=False)
