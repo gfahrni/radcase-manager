@@ -1,17 +1,33 @@
 """Configuration locale de RadCase Manager (V3).
 
-Les réglages propres à la machine (nom d'utilisateur, chemin du dossier partagé)
-sont stockés dans ``settings_data/settings.json``, à côté de l'application ou du
-binaire — jamais sur le dossier partagé.
+Les réglages propres au poste (nom d'utilisateur, chemin du dossier partagé) et
+l'index local sont stockés dans le **profil de l'utilisateur système** :
+
+    Windows : %LOCALAPPDATA%\\RadCaseManager\\settings_data\\settings.json
+              %LOCALAPPDATA%\\RadCaseManager\\settings_data\\index.db
+    macOS   : ~/Library/Application Support/RadCaseManager/settings_data/…
+    Linux   : $XDG_DATA_HOME/RadCaseManager/settings_data/…
+
+Chaque compte machine dispose donc de ses **propres** réglages, même si le même
+``.exe`` est partagé par plusieurs personnes sur un poste. Rien n'est jamais
+écrit sur le dossier partagé.
+
+Le nom de l'auteur proposé par défaut est celui de la **session en cours**
+(:func:`session_user_name`), modifiable dans les réglages.
 
 Ce module ne dépend d'aucune bibliothèque graphique : il est utilisable en CLI.
 """
 from __future__ import annotations
 
+import getpass
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+#: Nom du dossier applicatif dans le profil utilisateur.
+APP_NAME = "RadCaseManager"
 
 # --- Emplacements locaux ----------------------------------------------------
 
@@ -23,10 +39,92 @@ def _app_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _user_data_dir() -> Path:
+    """Répertoire de données **par utilisateur** du système d'exploitation.
+
+    - Windows : ``%LOCALAPPDATA%\\RadCaseManager`` (profil du compte connecté) ;
+    - macOS : ``~/Library/Application Support/RadCaseManager`` ;
+    - autres : ``$XDG_DATA_HOME/RadCaseManager`` (ou ``~/.local/share``).
+
+    La variable d'environnement ``RADCASE_SETTINGS_DIR`` force l'emplacement :
+    pratique pour tester en CLI sans toucher au profil réel.
+    """
+    override = os.environ.get("RADCASE_SETTINGS_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if base:
+            return Path(base) / APP_NAME
+    elif sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    else:
+        base = os.environ.get("XDG_DATA_HOME", "").strip()
+        root = Path(base) if base else Path.home() / ".local" / "share"
+        return root / APP_NAME
+    # Repli (rare) : aucun chemin système exploitable.
+    return Path.home() / f".{APP_NAME}"
+
+
 APP_DIR = _app_dir()
-SETTINGS_DIR = APP_DIR / "settings_data"
+SETTINGS_DIR = _user_data_dir() / "settings_data"
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 INDEX_DB = SETTINGS_DIR / "index.db"
+
+# --- Identité de la session -------------------------------------------------
+
+#: ``EXTENDED_NAME_FORMAT.NameDisplay`` (nom lisible du compte Windows).
+_WINDOWS_NAME_DISPLAY = 3
+
+
+def _windows_display_name() -> str:
+    """Nom d'affichage du compte Windows courant (``GetUserNameExW``).
+
+    Retourne ``""`` si l'appel échoue (hors Windows, compte sans nom d'affichage,
+    contexte restreint…).
+    """
+    try:
+        import ctypes
+
+        getter = ctypes.windll.secur32.GetUserNameExW  # type: ignore[attr-defined]
+        getter.argtypes = [
+            ctypes.c_uint,
+            ctypes.c_wchar_p,
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        getter.restype = ctypes.c_ubyte
+        size = ctypes.c_ulong(0)
+        getter(_WINDOWS_NAME_DISPLAY, None, ctypes.byref(size))
+        if size.value <= 1:
+            return ""
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if getter(_WINDOWS_NAME_DISPLAY, buffer, ctypes.byref(size)):
+            return buffer.value.strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def session_user_name() -> str:
+    """Nom de l'utilisateur de la session en cours (``""`` si indéterminable).
+
+    Sous Windows, on privilégie le **nom d'affichage** du compte (ex. « Dr
+    Martin ») ; à défaut, le nom de connexion (``USERNAME``) puis
+    ``getpass.getuser()``.
+    """
+    if sys.platform.startswith("win"):
+        name = _windows_display_name()
+        if name:
+            return name
+    for var in ("USERNAME", "USER", "LOGNAME"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return value
+    try:
+        return getpass.getuser().strip()
+    except Exception:
+        return ""
+
 
 DEFAULT_SETTINGS = {
     "user_name": "",
@@ -40,7 +138,7 @@ DEFAULT_SETTINGS = {
 
 @dataclass
 class Settings:
-    """Réglages locaux persistés dans ``settings.json``."""
+    """Réglages locaux persistés dans ``settings.json`` (profil de l'utilisateur)."""
 
     user_name: str = ""
     shared_root: str = ""
@@ -72,6 +170,9 @@ def load_settings() -> Settings:
         settings.last_units = []
     if not isinstance(settings.feed_last_seen, str):
         settings.feed_last_seen = ""
+    # Nom d'auteur : à défaut de valeur enregistrée, on prend celui de la session.
+    if not settings.user_name.strip():
+        settings.user_name = session_user_name()
     # Migration douce : ancien suivi « par unité » (feed_seen) -> filigrane global.
     if not settings.feed_last_seen and isinstance(data.get("feed_seen"), dict):
         values = [v for v in data["feed_seen"].values() if isinstance(v, str) and v]

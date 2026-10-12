@@ -77,9 +77,15 @@ class SettingsDialog(QDialog):
 
         form = QFormLayout(self)
 
-        self.name_input = QLineEdit(settings.user_name)
+        # Nom prérempli avec le compte de la session en cours (Windows) ; reste
+        # modifiable si le radiologue préfère un nom d'affichage plus lisible.
+        self.name_input = QLineEdit(settings.user_name.strip() or config.session_user_name())
         self.name_input.setPlaceholderText("Ex: Dr Martin")
         form.addRow("Nom d'utilisateur :", self.name_input)
+        name_hint = QLabel("Prérempli avec le compte de la session Windows — modifiable.")
+        name_hint.setStyleSheet("color: gray;")
+        name_hint.setWordWrap(True)
+        form.addRow("", name_hint)
 
         folder_row = QWidget()
         folder_layout = QHBoxLayout(folder_row)

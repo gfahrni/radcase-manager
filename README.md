@@ -17,7 +17,9 @@ partagé**.
 - **Écriture atomique** : dossier temporaire `.tmp_<id>` puis renommage.
 - **Visibilité** : chaque cas est `public` (défaut) ou `privé`. Un cas privé
   n'apparaît dans la recherche que pour son auteur.
-- **Réglages locaux** dans `settings_data/settings.json` (jamais sur le partage).
+- **Réglages locaux** dans `settings_data/settings.json`, dans le profil de
+  l'utilisateur système (`%LOCALAPPDATA%\RadCaseManager\` sous Windows) : jamais
+  sur le partage, et propres à chaque compte machine.
 
 Voir `ARCHITECTURE_PLAN.md` pour la justification détaillée (et pourquoi pas SQLite).
 
@@ -54,9 +56,13 @@ dist\RadCaseManager.exe
 ```
 
 Ce fichier unique est autonome : le copier où bon vous semble. Les réglages
-(`settings_data/settings.json`) se créent automatiquement **à côté du `.exe`**.
-Pour le déployer en réseau, le placer dans un dossier accessible en lecture par
-les postes (le `.exe` n'a pas besoin d'être « installé »).
+(`settings_data/settings.json`) et l'index local se créent automatiquement dans
+le **profil de l'utilisateur** (`%LOCALAPPDATA%\RadCaseManager\`), et non à côté
+du `.exe` : plusieurs comptes Windows peuvent donc partager le même `.exe` sans
+partager leurs réglages. Le nom d'auteur est prérempli avec le compte de la
+session, et reste modifiable. Pour le déployer en réseau, le placer dans un
+dossier accessible en lecture par les postes (le `.exe` n'a pas besoin d'être
+« installé »).
 
 ### 2. Construction manuelle (Windows)
 

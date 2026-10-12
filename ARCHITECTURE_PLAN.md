@@ -37,12 +37,18 @@ Un **dossier par cas**, contenant ses métadonnées `.md` et son image :
 
 ### Réglages locaux (jamais sur le partage)
 
-À côté de l'application/du binaire :
+Dans le **profil de l'utilisateur système**, donc propres à chaque compte machine
+(plusieurs personnes peuvent partager le même `.exe` sans partager leurs réglages) :
 
 ```
-settings_data/
-└── settings.json     # nom d'utilisateur + chemin du dossier partagé
+Windows : %LOCALAPPDATA%\RadCaseManager\settings_data\
+macOS   : ~/Library/Application Support/RadCaseManager/settings_data/
+├── settings.json     # nom d'utilisateur (compte de session) + chemin du dossier partagé
+└── index.db          # index local des cas (cache reconstructible)
 ```
+
+Le nom d'auteur (`user_name`) est **prérempli** avec le compte de la session
+Windows (nom d'affichage, via `GetUserNameExW`), modifiable dans les réglages.
 
 ## 📄 Format d'un cas (`case.md`)
 

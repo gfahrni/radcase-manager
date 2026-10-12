@@ -13,7 +13,9 @@ presse-papiers, dans un **dossier réseau partagé**.
   `visibility` = `public` (défaut) ou `private` (masqué de la recherche des autres).
 - **Pas de SQLite** (choix délibéré) : les cas sont **figés** (append-only), donc
   écriture dans un dossier temporaire `.tmp_<id>` puis `os.rename` **atomique**.
-- Réglages locaux dans `settings_data/settings.json` (jamais sur le partage).
+- Réglages locaux **par utilisateur système** dans `settings_data/settings.json`,
+  sous `%LOCALAPPDATA%\RadCaseManager\` (Windows) ; jamais sur le partage. Le nom
+  d'auteur est prérempli avec le compte de la session Windows (modifiable).
 - Justification complète dans `ARCHITECTURE_PLAN.md`.
 
 ## Modules

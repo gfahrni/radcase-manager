@@ -2,8 +2,9 @@
 """Spécification PyInstaller — RadCase Manager (binaire portable Windows).
 
 Produit un exécutable autonome (mode « onefile ») à partir de ``main_gui.py``.
-Les réglages locaux (``settings_data/``) sont créés **à côté de l'exécutable** :
-``config.py`` détecte le mode « frozen » via ``sys.frozen`` / ``sys.executable``.
+Les réglages locaux (``settings_data/``) sont créés dans le **profil de
+l'utilisateur** (``%LOCALAPPDATA%\\RadCaseManager\\`` sous Windows), et non à
+côté de l'exécutable : ``config.py`` résout ce chemin via ``os.environ``.
 
 Génération (Windows) :
 
