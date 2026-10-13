@@ -17,12 +17,15 @@ presse-papiers, dans un **dossier réseau partagé**.
   écriture dans un dossier temporaire `.tmp_<id>` puis `os.rename` **atomique**.
 - Réglages locaux **par utilisateur système** dans `settings_data/settings.json`,
   sous `%LOCALAPPDATA%\RadCaseManager\` (Windows) ; jamais sur le partage. Le nom
-  d'auteur est prérempli avec le compte de la session Windows (modifiable).
+  d'auteur est celui du **compte de session Windows** (nom de connexion) ; il est
+  ajouté automatiquement à `users.json` et choisi uniquement parmi les
+  utilisateurs connus (pas de saisie libre).
 - Justification complète dans `ARCHITECTURE_PLAN.md`.
 
 ## Modules
 - `config.py` : réglages locaux + chemins (gère le mode PyInstaller « frozen »).
-- `bootstrap.py` : init du dossier partagé (`cases/`, `units.json`, `README.md`).
+- `bootstrap.py` : init du dossier partagé (`cases/`, `units.json`, `users.json`,
+  `README.md`).
 - `storage.py` : `create_case()`, `update_case()`, `delete_case()`, `list_cases()`,
   `search_cases()`, plus l'**index local** (`settings_data/index.db`, cache
   reconstructible, maj par mtime). Scan de l'arbre **anti-rebondi** (TTL) pour

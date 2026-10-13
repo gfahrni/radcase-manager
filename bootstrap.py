@@ -1,8 +1,9 @@
 """Initialisation et gestion de la structure du dossier partagé.
 
 Rôle :
-- créer ``cases/``, ``units.json`` et ``README.md`` si absents ;
-- lire/ajouter des unités dans le vocabulaire contrôlé partagé.
+- créer ``cases/``, ``units.json``, ``users.json`` et ``README.md`` si absents ;
+- lire/ajouter des unités dans le vocabulaire contrôlé partagé ;
+- lire/ajouter des utilisateurs connus (liste partagée des noms d'auteur).
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from typing import Any, Dict, List
 
 CASES_DIRNAME = "cases"
 UNITS_FILENAME = "units.json"
+USERS_FILENAME = "users.json"
 README_FILENAME = "README.md"
 
 # Unité fourre-tout, toujours affichée en dernier.
@@ -51,6 +53,9 @@ Ce dossier contient les cas cliniques enregistrés avec RadCase Manager.
 - `cases/AAAA-MM/<id>/image.jpg` : l'image du cas (le cas échéant), compressée
   en JPEG (les cas plus anciens peuvent contenir un `image.png`).
 - `units.json` : le vocabulaire contrôlé des unités (modifiable par tous).
+- `users.json` : la liste partagée des utilisateurs connus (auteurs). Chaque
+  poste y ajoute automatiquement le compte de sa session Windows ; le choix du
+  nom d'auteur est limité à cette liste.
 
 ## Règles
 
@@ -74,6 +79,10 @@ def ensure_shared_structure(shared_root: str | Path) -> Path:
             ),
             encoding="utf-8",
         )
+
+    users_path = root / USERS_FILENAME
+    if not users_path.exists():
+        _write_users(users_path, [])
 
     readme_path = root / README_FILENAME
     if not readme_path.exists():
@@ -132,4 +141,49 @@ def add_unit(shared_root: str | Path, name: str, description: str = "", emoji: s
         json.dumps({"units": units}, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    return True
+
+
+def _sorted_users(users: List[str]) -> List[str]:
+    """Trie alphabétique des utilisateurs, doublons retirés (insensible à la casse)."""
+    seen: Dict[str, str] = {}
+    for name in users:
+        name = str(name).strip()
+        if name:
+            seen.setdefault(name.casefold(), name)
+    return sorted(seen.values(), key=str.casefold)
+
+
+def _write_users(users_path: Path, users: List[str]) -> None:
+    users_path.write_text(
+        json.dumps({"users": _sorted_users(users)}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def load_users(shared_root: str | Path) -> List[str]:
+    """Charge la liste partagée des utilisateurs connus (triée, sans doublon)."""
+    users_path = Path(shared_root) / USERS_FILENAME
+    if not users_path.exists():
+        return []
+    try:
+        data: Any = json.loads(users_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    raw = data.get("users", []) if isinstance(data, dict) else []
+    return _sorted_users([u for u in raw if isinstance(u, str)])
+
+
+def add_user(shared_root: str | Path, name: str) -> bool:
+    """Ajoute un utilisateur connu au fichier partagé. False s'il existe déjà."""
+    name = (name or "").strip()
+    if not name:
+        return False
+    root = Path(shared_root)
+    root.mkdir(parents=True, exist_ok=True)
+    users = load_users(root)
+    if any(u.casefold() == name.casefold() for u in users):
+        return False
+    users.append(name)
+    _write_users(root / USERS_FILENAME, users)
     return True

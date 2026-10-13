@@ -32,6 +32,7 @@ Un **dossier par cas**, contenant ses métadonnées `.md` et son image :
 │           ├── case.md                 # frontmatter YAML + description
 │           └── image.jpg               # JPEG (compressé, qualité IMAGE_QUALITY)
 ├── units.json                          # vocabulaire contrôlé des unités
+├── users.json                          # liste partagée des utilisateurs connus
 └── README.md
 ```
 
@@ -47,8 +48,10 @@ macOS   : ~/Library/Application Support/RadCaseManager/settings_data/
 └── index.db          # index local des cas (cache reconstructible)
 ```
 
-Le nom d'auteur (`user_name`) est **prérempli** avec le compte de la session
-Windows (nom d'affichage, via `GetUserNameExW`), modifiable dans les réglages.
+Le nom d'auteur (`user_name`) est celui du **compte de session Windows** (nom de
+connexion : `USERNAME`, repli `USER`/`LOGNAME`/`getpass`). Il est ajouté
+automatiquement à la liste partagée `users.json` et n'est choisi que parmi les
+utilisateurs connus (pas de saisie libre).
 
 ## 📄 Format d'un cas (`case.md`)
 
@@ -200,7 +203,7 @@ fenêtre affichée.
 | Module | Rôle |
 |---|---|
 | `config.py` | réglages locaux (`settings.json`), chemins |
-| `bootstrap.py` | crée `cases/`, `units.json`, `README.md` si absents |
+| `bootstrap.py` | crée `cases/`, `units.json`, `users.json`, `README.md` si absents |
 | `storage.py` | `create_case()`, `list_cases()`, `search_cases()` + index local |
 | `thumbnails.py` | cache local des vignettes d'affichage (dérivées, reconstructible) |
 | `main_gui.py` | interface PySide6 (saisie + consultation) |

@@ -42,9 +42,10 @@ pip install -r requirements.txt
 python main_gui.py
 ```
 
-Au premier lancement, une fenêtre demande votre nom et le chemin du dossier
-partagé. Ce dossier est ensuite initialisé automatiquement (`cases/`,
-`units.json`, `README.md`).
+Au premier lancement, une fenêtre demande le chemin du dossier partagé ; le nom
+d'auteur est repris automatiquement du compte Windows de la session (ajouté à la
+liste partagée s'il est inconnu). Le dossier est ensuite initialisé
+automatiquement (`cases/`, `units.json`, `users.json`, `README.md`).
 
 ## Binaire portable Windows (.exe)
 
@@ -64,8 +65,9 @@ Ce fichier unique est autonome : le copier où bon vous semble. Les réglages
 (`settings_data/settings.json`) et l'index local se créent automatiquement dans
 le **profil de l'utilisateur** (`%LOCALAPPDATA%\RadCaseManager\`), et non à côté
 du `.exe` : plusieurs comptes Windows peuvent donc partager le même `.exe` sans
-partager leurs réglages. Le nom d'auteur est prérempli avec le compte de la
-session, et reste modifiable. Pour le déployer en réseau, le placer dans un
+partager leurs réglages. Le nom d'auteur est celui du compte Windows de la
+session ; il est enregistré dans la liste partagée `users.json` et n'est choisi
+que parmi les utilisateurs connus. Pour le déployer en réseau, le placer dans un
 dossier accessible en lecture par les postes (le `.exe` n'a pas besoin d'être
 « installé »).
 

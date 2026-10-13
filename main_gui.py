@@ -67,7 +67,7 @@ FEED_BADGE_INTERVAL_MS = 5 * 60 * 1000
 # Réglages (/première exécution)
 # --------------------------------------------------------------------------- #
 class SettingsDialog(QDialog):
-    """Saisie du nom d'utilisateur et du dossier partagé."""
+    """Choix de l'utilisateur connu et du dossier partagé."""
 
     def __init__(self, settings: config.Settings, parent=None):
         super().__init__(parent)
@@ -75,15 +75,21 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(520)
 
         self._initial = settings
+        self._session_name = config.session_user_name().strip()
 
         form = QFormLayout(self)
 
-        # Nom prérempli avec le compte de la session en cours (Windows) ; reste
-        # modifiable si le radiologue préfère un nom d'affichage plus lisible.
-        self.name_input = QLineEdit(settings.user_name.strip() or config.session_user_name())
-        self.name_input.setPlaceholderText("Ex: Dr Martin")
-        form.addRow("Nom d'utilisateur :", self.name_input)
-        name_hint = QLabel("Prérempli avec le compte de la session Windows — modifiable.")
+        # Nom d'auteur : liste déroulante des **utilisateurs connus** (dossier
+        # partagé), pré-sélectionnée sur le compte de la session Windows. Le nom
+        # n'est plus saisi librement ; il est ajouté automatiquement s'il est
+        # inconnu (voir ``_ensure_user_known``).
+        self.name_input = QComboBox()
+        self.name_input.setEditable(False)
+        form.addRow("Utilisateur :", self.name_input)
+        name_hint = QLabel(
+            "Compte de la session Windows, limité aux utilisateurs connus du "
+            "dossier partagé (ajout automatique si inconnu)."
+        )
         name_hint.setStyleSheet("color: gray;")
         name_hint.setWordWrap(True)
         form.addRow("", name_hint)
@@ -99,10 +105,46 @@ class SettingsDialog(QDialog):
         folder_layout.addWidget(browse)
         form.addRow("Dossier partagé :", folder_row)
 
+        # Le dossier conditionne la liste des utilisateurs connus : on la
+        # rafraîchit quand il change.
+        self.folder_input.editingFinished.connect(self._reload_known_users)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+
+        self._reload_known_users()
+
+    def _known_users(self, root: str) -> list:
+        """Utilisateurs à proposer : connus du dossier + session + choix courant."""
+        names = [self._session_name]
+        if root:
+            names += bootstrap.load_users(root)
+        names.append(getattr(self, "_initial", config.Settings()).user_name.strip())
+        seen = {}
+        for name in names:
+            name = (name or "").strip()
+            if name:
+                seen.setdefault(name.casefold(), name)
+        return sorted(seen.values(), key=str.casefold)
+
+    def _reload_known_users(self) -> None:
+        """Repopule la liste déroulante d'après le dossier partagé saisi."""
+        current = self.name_input.currentText().strip()
+        self.name_input.clear()
+        self.name_input.addItems(self._known_users(self.folder_input.text().strip()))
+        self._select_user(current or self._initial.user_name.strip() or self._session_name)
+
+    def _select_user(self, name: str) -> None:
+        """Sélectionne ``name`` dans la liste (repli sur le 1er élément)."""
+        target = (name or "").strip().casefold()
+        for index in range(self.name_input.count()):
+            if self.name_input.itemText(index).strip().casefold() == target:
+                self.name_input.setCurrentIndex(index)
+                return
+        if self.name_input.count():
+            self.name_input.setCurrentIndex(0)
 
     def browse(self) -> None:
         chosen = QFileDialog.getExistingDirectory(
@@ -110,11 +152,12 @@ class SettingsDialog(QDialog):
         )
         if chosen:
             self.folder_input.setText(chosen)
+            self._reload_known_users()
 
     def result_settings(self) -> config.Settings:
         initial = getattr(self, "_initial", config.Settings())
         return config.Settings(
-            user_name=self.name_input.text().strip(),
+            user_name=self.name_input.currentText().strip(),
             shared_root=self.folder_input.text().strip(),
             last_units=list(initial.last_units),
             last_browser_unit=initial.last_browser_unit,
@@ -123,13 +166,26 @@ class SettingsDialog(QDialog):
         )
 
     def accept(self) -> None:  # noqa: D102
-        if not self.name_input.text().strip():
-            QMessageBox.warning(self, "Champ manquant", "Le nom d'utilisateur est obligatoire.")
+        if not self.name_input.currentText().strip():
+            QMessageBox.warning(self, "Champ manquant", "L'utilisateur est obligatoire.")
             return
         if not self.folder_input.text().strip():
             QMessageBox.warning(self, "Champ manquant", "Le dossier partagé est obligatoire.")
             return
         super().accept()
+
+
+def _ensure_user_known(settings: config.Settings) -> None:
+    """Enregistre le compte de session (et l'auteur courant) comme utilisateur connu.
+
+    Le nom d'auteur n'est plus saisi librement : on garantit qu'il figure dans la
+    liste partagée ``users.json``, en l'ajoutant au besoin.
+    """
+    if not settings.shared_root.strip():
+        return
+    for name in (config.session_user_name(), settings.user_name):
+        if name.strip():
+            bootstrap.add_user(settings.shared_root, name)
 
 
 # --------------------------------------------------------------------------- #
@@ -2823,6 +2879,7 @@ class MainWindow(QMainWindow):
             self.settings = dialog.result_settings()
             config.save_settings(self.settings)
             bootstrap.ensure_shared_structure(self.settings.shared_root)
+            _ensure_user_known(self.settings)
             self.reload_units()
             self.reload_filter_units()
             self.reload_filter_authors()
@@ -2893,6 +2950,7 @@ def main() -> int:
         config.save_settings(settings)
 
     bootstrap.ensure_shared_structure(settings.shared_root)
+    _ensure_user_known(settings)
 
     window = MainWindow(settings)
     # Bouton de reconfiguration accessible depuis la barre de menus.

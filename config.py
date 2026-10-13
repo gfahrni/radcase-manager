@@ -12,8 +12,9 @@ Chaque compte machine dispose donc de ses **propres** réglages, même si le mê
 ``.exe`` est partagé par plusieurs personnes sur un poste. Rien n'est jamais
 écrit sur le dossier partagé.
 
-Le nom de l'auteur proposé par défaut est celui de la **session en cours**
-(:func:`session_user_name`), modifiable dans les réglages.
+Le nom de l'auteur est celui du **compte de la session en cours**
+(:func:`session_user_name`) : il est enregistré automatiquement dans la liste
+partagée des utilisateurs connus et n'est plus saisi librement.
 
 Ce module ne dépend d'aucune bibliothèque graphique : il est utilisable en CLI.
 """
@@ -73,49 +74,14 @@ INDEX_DB = SETTINGS_DIR / "index.db"
 
 # --- Identité de la session -------------------------------------------------
 
-#: ``EXTENDED_NAME_FORMAT.NameDisplay`` (nom lisible du compte Windows).
-_WINDOWS_NAME_DISPLAY = 3
-
-
-def _windows_display_name() -> str:
-    """Nom d'affichage du compte Windows courant (``GetUserNameExW``).
-
-    Retourne ``""`` si l'appel échoue (hors Windows, compte sans nom d'affichage,
-    contexte restreint…).
-    """
-    try:
-        import ctypes
-
-        getter = ctypes.windll.secur32.GetUserNameExW  # type: ignore[attr-defined]
-        getter.argtypes = [
-            ctypes.c_uint,
-            ctypes.c_wchar_p,
-            ctypes.POINTER(ctypes.c_ulong),
-        ]
-        getter.restype = ctypes.c_ubyte
-        size = ctypes.c_ulong(0)
-        getter(_WINDOWS_NAME_DISPLAY, None, ctypes.byref(size))
-        if size.value <= 1:
-            return ""
-        buffer = ctypes.create_unicode_buffer(size.value)
-        if getter(_WINDOWS_NAME_DISPLAY, buffer, ctypes.byref(size)):
-            return buffer.value.strip()
-    except Exception:
-        return ""
-    return ""
-
 
 def session_user_name() -> str:
-    """Nom de l'utilisateur de la session en cours (``""`` si indéterminable).
+    """Nom de **connexion** de l'utilisateur de la session en cours.
 
-    Sous Windows, on privilégie le **nom d'affichage** du compte (ex. « Dr
-    Martin ») ; à défaut, le nom de connexion (``USERNAME``) puis
-    ``getpass.getuser()``.
+    Retourne ``""`` si indéterminable. On privilégie le nom de connexion
+    (Windows ``USERNAME``) plutôt que le nom d'affichage : il est unique et
+    stable, ce qui en fait une bonne identité d'auteur.
     """
-    if sys.platform.startswith("win"):
-        name = _windows_display_name()
-        if name:
-            return name
     for var in ("USERNAME", "USER", "LOGNAME"):
         value = os.environ.get(var, "").strip()
         if value:
