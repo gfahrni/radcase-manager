@@ -44,6 +44,11 @@ presse-papiers, dans un **dossier réseau partagé**.
   Réglages associés : `auto_check_updates`, `last_update_check` (anti-rebond 24 h),
   `available_update` + `update_snooze_until` / `update_snooze_version` (rapport
   d'un mois après « Plus tard », indicateur persistant en barre de statut).
+  **La relance pose `PYINSTALLER_RESET_ENVIRONMENT=1` et purge `_PYI_*` / `_MEI*`** :
+  sans cela PyInstaller fait hériter son environnement (même chemin d'exécutable ⇒
+  il croit au même programme) et la nouvelle version tourne dans le `_MEI` de
+  l'ancienne — images introuvables et « Failed to remove temporary directory ».
+  Ne pas retirer ce nettoyage.
   Aucune dépendance externe (hors `send2trash`, déjà requis).
 - `version.py` : version de l'application, **inscrite par la CI** au build à partir
   du tag ; un binaire de développement (``…dev``) désactive la mise à jour.

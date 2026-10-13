@@ -338,8 +338,27 @@ def download(tag: str, dest: Path | None = None, progress=None) -> Path:
 # Application (remplacement de l'exécutable)
 # --------------------------------------------------------------------------- #
 def _relaunch(exe: Path) -> None:
-    """Démarre la nouvelle version, détachée de l'instance courante."""
-    kwargs: dict = {"cwd": str(exe.parent), "close_fds": True}
+    """Démarre la nouvelle version, détachée et avec un environnement **propre**.
+
+    Point crucial : l'instance relancée doit **réinitialiser l'environnement
+    PyInstaller** (`PYINSTALLER_RESET_ENVIRONMENT`, prévu par PyInstaller pour ce
+    cas). Sinon le nouveau processus hérite de `_PYI_APPLICATION_HOME_DIR` et
+    `_PYI_PARENT_PROCESS_LEVEL` de l'instance qui se remplace.
+
+    Or PyInstaller décide d'hériter l'environnement en comparant `_PYI_ARCHIVE_FILE`
+    au chemin de l'exécutable courant. Comme notre mécanique **conserve le même
+    chemin** (on remplace le fichier au même endroit), il croit avoir affaire au
+    même programme et n'extrait pas son propre dossier temporaire : la nouvelle
+    version tourne alors dans le `_MEI` de l'ancienne. Conséquences observées : les
+    images ne s'affichent plus (les plugins Qt du dossier temporaire sont supprimés
+    au passage) et l'ancien processus affiche « Failed to remove temporary
+    directory » en tentant de nettoyer un dossier encore utilisé.
+    """
+    env = dict(os.environ)
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    for key in [k for k in env if k.startswith(("_PYI_", "_MEI"))]:
+        del env[key]  # ceinture et bretelles (versions de bootloader plus anciennes)
+    kwargs: dict = {"cwd": str(exe.parent), "close_fds": True, "env": env}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
     subprocess.Popen([str(exe)], **kwargs)

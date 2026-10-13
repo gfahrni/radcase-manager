@@ -100,6 +100,18 @@ on **peut le renommer**. C'est toute l'astuce.
 > l'application**, pour que le Bureau ne montre jamais plus d'une icône (voir §11
 > et §13).
 
+> **Piège PyInstaller, corrigé en v4.5.** La relance doit poser
+> `PYINSTALLER_RESET_ENVIRONMENT=1` **et** retirer les variables `_PYI_*` / `_MEI*`.
+> Le bootloader décide d'hériter l'environnement du parent en comparant
+> `_PYI_ARCHIVE_FILE` au chemin de l'exécutable courant (cf. `pyi_main.c`) : comme
+> notre mécanique **garde le même chemin**, il conclut « même programme », n'extrait
+> donc **pas** son propre `_MEI` et fait tourner la nouvelle version dans le dossier
+> temporaire de l'ancienne — que l'ancienne tente ensuite de supprimer. Symptômes :
+> images qui ne s'affichent plus (les plugins Qt disparaissent avec le dossier) et
+> boîte « **Failed to remove temporary directory** » cachée derrière la fenêtre.
+> Tout redevient normal en quittant et relançant à la main : c'est la signature du
+> bug.
+
 Avantage **important** : aucun `.bat`/`.ps1` temporaire n'est lancé, or les
 politiques d'entreprise (AppLocker/SRP) bloquent souvent l'exécution de scripts
 depuis `%TEMP%`. Tout se fait **dans le processus**.
@@ -365,6 +377,13 @@ officielle ne sont jamais touchés.
 Une version **strictement plus récente** que celle reportée l'emporte sur le
 report : si l'utilisateur a dit « Plus tard » à la v4.4 puis qu'une v4.5 paraît,
 elle est proposée sans attendre le mois.
+
+**`v4.5` — environnement PyInstaller réinitialisé à la relance.** Correction du bug
+le plus sérieux de la série : après une mise à jour, la nouvelle version tournait
+dans le dossier temporaire `_MEI…` de l'ancienne — **images introuvables** dans
+l'application et boîte « Failed to remove temporary directory » cachée derrière la
+fenêtre —, tout rentrant dans l'ordre après avoir quitté et relancé à la main. Le
+piège est expliqué au §4.
 
 Pistes non retenues pour l'instant : vérification de l'empreinte SHA-256 côté
 client, retour arrière automatique si la nouvelle version ne démarre pas, canal
