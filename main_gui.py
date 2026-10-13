@@ -1445,6 +1445,24 @@ class FeedView(QWidget):
 # --------------------------------------------------------------------------- #
 # Fenêtre principale
 # --------------------------------------------------------------------------- #
+class _NaturalHeightPanel(QWidget):
+    """Panneau qui ne grandit jamais au-delà de sa hauteur naturelle.
+
+    Utilisé pour le panneau « Temporalité » du Fil d'actualité : il conserve sa
+    hauteur naturelle (aucun espace mort sous les ancres) tout en restant le
+    premier panneau à se comprimer — avec ascenseur — quand la fenêtre devient
+    trop courte.
+    """
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        super().resizeEvent(event)
+        # Fige la hauteur maximale sur la taille préférée, recalculée au besoin
+        # (changement de police / d'échelle de l'écran).
+        hint = self.sizeHint().height()
+        if self.maximumHeight() != hint:
+            self.setMaximumHeight(hint)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, settings: config.Settings):
         super().__init__()
@@ -1758,14 +1776,15 @@ class MainWindow(QMainWindow):
         self.feed_units_scroll.setWidget(self.feed_units_container)
         top_layout.addWidget(self.feed_units_scroll, 1)
 
-        left_layout.addWidget(top, 1)
+        left_layout.addWidget(top)
 
         # --- Zone basse : ancrages temporels ---
-        # Volontairement SANS facteur d'étirement : la temporalité prend sa hauteur
-        # naturelle et tout l'espace restant revient à la liste des unités (déployée
-        # au maximum). Elle n'est comprimée — avec ascenseur — que si la fenêtre est
-        # trop courte.
-        bottom = QWidget()
+        # La temporalité est le panneau qui cède en premier : étiré dans la mise
+        # en page (il absorbe le manque de place) mais plafonné à sa hauteur
+        # naturelle (aucun espace mort sous les ancres). La liste des unités,
+        # sans étirement, reste donc déployée au maximum et n'est comprimée —
+        # avec ascenseur — qu'une fois la temporalité réduite au minimum.
+        bottom = _NaturalHeightPanel()
         bottom.setAttribute(Qt.WA_StyledBackground, True)
         bottom.setStyleSheet("border-top: 1px solid #444;")
         bottom_layout = QVBoxLayout(bottom)
@@ -1799,7 +1818,7 @@ class MainWindow(QMainWindow):
         anchors_scroll.setWidget(anchors_container)
         bottom_layout.addWidget(anchors_scroll)
 
-        left_layout.addWidget(bottom)
+        left_layout.addWidget(bottom, 1)
 
         # --- Zone basse : filtre « Type de cas » (3 cases à cocher) ---
         feed_types_box = QWidget()
