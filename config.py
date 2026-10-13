@@ -79,6 +79,10 @@ APP_DIR = _app_dir()
 SETTINGS_DIR = _user_data_dir() / "settings_data"
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 INDEX_DB = SETTINGS_DIR / "index.db"
+#: Dossier de transit des mises à jour : nouvelle version en cours de
+#: téléchargement + sauvegarde de l'ancienne. Volontairement **hors du Bureau**
+#: pour que le poste ne montre jamais qu'une seule icône de l'application.
+UPDATES_DIR = _user_data_dir() / "updates"
 
 # --- Identité de la session -------------------------------------------------
 

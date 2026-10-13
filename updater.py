@@ -5,9 +5,12 @@ Principe (détails et justification dans ``AUTO_UPDATE_PLAN.md``) :
 1. l'application vérifie **en tâche de fond** la dernière release publiée, au plus
    une fois toutes les 24 h ;
 2. si une version plus récente existe, l'utilisateur peut la télécharger ;
-3. l'exécutable téléchargé est posé **dans le même dossier** que l'exécutable
-   courant (le Bureau), puis prend sa place par **renommage** : Windows interdit
-   d'écraser un ``.exe`` en cours d'exécution, mais autorise à le renommer.
+3. le nouvel exécutable est téléchargé dans un **dossier de transit**
+   (``%LOCALAPPDATA%\\RadCaseManager\\updates\\``, hors du Bureau), puis prend la
+   place de l'ancien par **déplacement** : Windows interdit d'écraser un ``.exe``
+   en cours d'exécution, mais autorise à le renommer. L'ancien reste dans le
+   transit comme **sauvegarde de retour arrière**, de sorte que le Bureau ne
+   montre jamais plus d'une icône de l'application.
 
 Aucune dépendance externe (bibliothèque standard uniquement), et **aucun script
 externe** n'est lancé : tout se fait dans le processus déjà autorisé à s'exécuter.
@@ -24,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -104,16 +108,88 @@ def exe_path() -> Path:
     return Path(sys.executable).resolve()
 
 
+def updates_dir() -> Path:
+    """Dossier de transit des mises à jour (hors du Bureau, jamais visible)."""
+    return config.UPDATES_DIR
+
+
+def _transit_dir() -> Path | None:
+    """Dossier de transit utilisable, sinon ``None`` (repli à côté de l'exe).
+
+    Tout le transit vit ici — la nouvelle version en cours de téléchargement comme
+    la sauvegarde de l'ancienne — pour que le Bureau ne montre **jamais** plus
+    d'une icône de l'application.
+    """
+    try:
+        directory = updates_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+    except OSError:
+        return None
+
+
+def _in_transit(filename: str) -> Path:
+    """Chemin d'un fichier de mise à jour : transit si possible, sinon voisin de l'exe."""
+    directory = _transit_dir()
+    return (directory if directory is not None else exe_path().parent) / filename
+
+
 def staged_path() -> Path:
-    """Nouvelle version en attente, posée à côté de l'exécutable courant."""
+    """Nouvelle version en attente d'application (dans le dossier de transit)."""
     exe = exe_path()
-    return exe.with_name(f"{exe.stem}.new{exe.suffix}")
+    return _in_transit(f"{exe.stem}.new{exe.suffix}")
 
 
 def backup_path() -> Path:
-    """Sauvegarde de l'exécutable remplacé (``.old``), supprimée plus tard."""
+    """Sauvegarde de l'exécutable remplacé (retour arrière possible)."""
     exe = exe_path()
-    return exe.with_name(f"{exe.stem}.old{exe.suffix}")
+    return _in_transit(f"{exe.stem}.old{exe.suffix}")
+
+
+def _staged_candidates() -> list:
+    """Emplacements possibles de la nouvelle version (transit, puis voisin de l'exe)."""
+    exe = exe_path()
+    paths = [staged_path()]
+    sibling = exe.with_name(f"{exe.stem}.new{exe.suffix}")
+    if sibling not in paths:
+        paths.append(sibling)
+    return paths
+
+
+def _backup_candidates() -> list:
+    """Emplacements possibles de la sauvegarde (transit, puis voisin de l'exe)."""
+    exe = exe_path()
+    paths = [backup_path()]
+    sibling = exe.with_name(f"{exe.stem}.old{exe.suffix}")
+    if sibling not in paths:
+        paths.append(sibling)
+    return paths
+
+
+def _silent_unlink(path: Path) -> None:
+    """Supprime un fichier sans jamais échouer (absent, verrou…)."""
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _move_into_place(source: Path, target: Path) -> None:
+    """Déplace ``source`` sur ``target`` (qui ne doit pas être en cours d'exécution).
+
+    ``os.replace`` est atomique sur un même volume ; entre deux volumes il faut
+    recopier, on passe alors par un fichier temporaire voisin avant la bascule.
+    """
+    try:
+        os.replace(source, target)
+        return
+    except OSError:
+        pass
+    temp = target.with_name(f"{target.name}.incoming")
+    _silent_unlink(temp)
+    shutil.copy2(source, temp)
+    os.replace(temp, target)
+    _silent_unlink(source)
 
 
 # --------------------------------------------------------------------------- #
@@ -222,43 +298,43 @@ def apply_update() -> None:
     """Remplace l'exécutable courant par la version téléchargée, puis relance.
 
     Windows interdit d'**écraser** un ``.exe`` en cours d'exécution, mais autorise
-    à le **renommer** : on renomme donc l'ancien en ``.old`` (sauvegarde), on met
-    le nouveau à sa place, puis on relance l'application. Quelques tentatives
-    couvrent un verrou transitoire (antivirus).
+    à le **déplacer** : on déplace donc l'ancien vers le dossier de transit (il y
+    reste comme sauvegarde de retour arrière, invisible sur le Bureau), on met le
+    nouveau à sa place, puis on relance l'application. Quelques tentatives
+    couvrent un verrou transitoire (antivirus). Si le dossier de transit n'est pas
+    utilisable, on retombe sur des fichiers voisins de l'exécutable.
     """
     if not getattr(sys, "frozen", False):
         raise UpdateError("La mise à jour n'est possible que pour l'application installée.")
     exe = exe_path()
-    staged = staged_path()
-    backup = backup_path()
-    if not staged.exists():
+    staged = next((path for path in _staged_candidates() if path.exists()), None)
+    if staged is None:
         raise UpdateError("Aucune mise à jour téléchargée.")
 
-    try:
-        backup.unlink()
-    except OSError:
-        pass
-
     last_error: Exception | None = None
-    for _ in range(6):
-        try:
-            os.rename(exe, backup)
-        except OSError as exc:  # verrou (antivirus) : on réessaie
-            last_error = exc
-            time.sleep(0.5)
-            continue
-        try:
-            os.replace(staged, exe)
-        except OSError as exc:
+    for backup in _backup_candidates():
+        _silent_unlink(backup)  # sauvegarde d'une mise à jour précédente
+        for _ in range(4):
             try:
-                os.rename(backup, exe)  # on remet l'ancien en place
-            except OSError:
-                pass
-            last_error = exc
-            time.sleep(0.5)
-            continue
-        last_error = None
-        break
+                os.rename(exe, backup)
+            except OSError as exc:  # verrou (antivirus) ou volume différent
+                last_error = exc
+                time.sleep(0.5)
+                continue
+            try:
+                _move_into_place(staged, exe)
+            except OSError as exc:
+                try:
+                    os.rename(backup, exe)  # on remet l'ancien en place
+                except OSError:
+                    pass
+                last_error = exc
+                time.sleep(0.5)
+                continue
+            last_error = None
+            break
+        if last_error is None:
+            break
 
     if last_error is not None:
         raise UpdateError(f"Remplacement impossible : {last_error}")
@@ -268,7 +344,7 @@ def apply_update() -> None:
     except Exception:
         # Relance impossible : on tente de revenir à l'état précédent.
         try:
-            os.replace(exe, staged)
+            _move_into_place(exe, staged)
             os.rename(backup, exe)
         except OSError:
             pass
@@ -279,34 +355,44 @@ def pending_update() -> Path | None:
     """Exécutable déjà téléchargé et en attente d'application, s'il existe."""
     if not is_enabled():
         return None
-    staged = staged_path()
-    try:
-        if staged.exists() and staged.stat().st_size >= MIN_EXE_SIZE:
-            return staged
-    except OSError:
-        pass
+    for candidate in _staged_candidates():
+        try:
+            if candidate.exists() and candidate.stat().st_size >= MIN_EXE_SIZE:
+                return candidate
+        except OSError:
+            continue
     return None
 
 
 def cleanup() -> None:
-    """Supprime les restes de la mise à jour précédente (démarrage).
+    """Nettoie les restes de mise à jour (à appeler au démarrage).
 
-    Le ``.old`` est verrouillé par l'instance qui vient de se remplacer : il n'est
-    donc supprimable qu'au lancement suivant. Les ``.part`` proviennent d'un
-    téléchargement interrompu.
+    - ``.part`` : téléchargement interrompu → **supprimé** ;
+    - ``.new``  : mise à jour téléchargée mais pas encore appliquée → **conservée**
+      (elle est proposée à l'utilisateur) ;
+    - ``.old``  : sauvegarde de retour arrière → **conservée** ; elle n'est
+      remplacée qu'au moment de la mise à jour suivante, des jours plus tard, ce
+      qui évite tout verrou de fichier (l'ancienne version avait alors quitté
+      depuis longtemps).
+
+    Les fichiers posés **à côté** de l'exécutable (ancienne mécanique) sont
+    nettoyés dès que le dossier de transit est disponible, pour que le Bureau ne
+    montre jamais plus d'une icône.
     """
     if not getattr(sys, "frozen", False):
         return
     exe = exe_path()
-    try:
-        backup_path().unlink()
-    except OSError:
-        pass
-    for leftover in exe.parent.glob(f"{exe.stem}.new*.part"):
-        try:
-            leftover.unlink()
-        except OSError:
-            pass
+    transit = _transit_dir()
+    for directory in {path for path in (transit, exe.parent) if path is not None}:
+        for leftover in directory.glob(f"{exe.stem}*.part"):
+            _silent_unlink(leftover)
+    if transit is not None and transit != exe.parent:
+        for pattern in (
+            f"{exe.stem}.new{exe.suffix}",
+            f"{exe.stem}.old{exe.suffix}",
+        ):
+            for leftover in exe.parent.glob(pattern):
+                _silent_unlink(leftover)
 
 
 # --------------------------------------------------------------------------- #

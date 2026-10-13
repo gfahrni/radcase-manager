@@ -108,11 +108,16 @@ L'application installée se met à jour **d'elle-même** depuis les releases Git
   `/releases/latest`, ce qui n'est soumis à aucun quota d'API.
 - Si une version plus récente existe, elle propose de la télécharger (menu
   **Aide → Vérifier les mises à jour…** pour forcer la vérification).
-- L'exécutable téléchargé est posé à côté de l'application puis **prend sa place
-  par renommage** (Windows interdit d'écraser un `.exe` en cours d'exécution, mais
-  autorise à le renommer). L'ancienne version est conservée en `.old` comme
-  sauvegarde, puis supprimée au démarrage suivant. Aucun script externe n'est
-  lancé : tout se passe dans le processus déjà autorisé à s'exécuter.
+- Le téléchargement **et** la sauvegarde transitent par
+  `%LOCALAPPDATA%\RadCaseManager\updates\`, **hors du dossier de l'application** :
+  le Bureau (ou le dossier du `.exe`) ne montre donc **jamais** plus d'une icône,
+  même pendant le téléchargement.
+- Le nouvel exécutable **prend la place** de l'ancien par **déplacement** (Windows
+  interdit d'écraser un `.exe` en cours d'exécution, mais autorise à le renommer).
+  L'ancien reste dans le dossier de transit comme **sauvegarde de retour arrière**,
+  et n'est remplacé qu'à la mise à jour suivante — ce qui évite tout verrou de
+  fichier. Aucun script externe n'est lancé : tout se passe dans le processus déjà
+  autorisé à s'exécuter.
 
 La version embarquée est **inscrite par la CI** dans `version.py` au moment du
 build, à partir du tag. Un binaire de développement (version contenant `dev`, ou

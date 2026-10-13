@@ -95,6 +95,11 @@ on **peut le renommer**. C'est toute l'astuce.
      démarrage d'après, à titre de nettoyage ; il sert aussi de **sauvegarde de
      secours** (rollback en cas de `.new` corrompu).
 
+> **Placement final (v4.2)** : tout ce transit — `.new`, `.part` et `.old` — vit
+> dans `%LOCALAPPDATA%\RadCaseManager\updates\`, **hors du dossier de
+> l'application**, pour que le Bureau ne montre jamais plus d'une icône (voir §11
+> et §13).
+
 Avantage **important** : aucun `.bat`/`.ps1` temporaire n'est lancé, or les
 politiques d'entreprise (AppLocker/SRP) bloquent souvent l'exécution de scripts
 depuis `%TEMP%`. Tout se fait **dans le processus**.
@@ -239,16 +244,19 @@ d'applications** ; on ne peut y déposer qu'un `.exe`. Conséquences :
 
 **Scénario retenu (option B, sans helper) :**
 
-1. vérification en fond → bandeau « Mise à jour disponible » ;
-2. clic « Mettre à jour » → téléchargement dans **le même dossier** (le Bureau),
-   sous `RadCaseManager.new.exe` (même dossier ⇒ renommage **atomique**) ;
-3. en interne : `RadCaseManager.exe` → `RadCaseManager.old.exe`, puis
-   `RadCaseManager.new.exe` → `RadCaseManager.exe`, puis relance et fermeture de
-   l'instance courante ;
-4. le `.old` (sauvegarde de secours) est supprimé au démarrage suivant.
+1. vérification en fond → « Mise à jour disponible » ;
+2. clic « Mettre à jour » → téléchargement dans le **dossier de transit**
+   `%LOCALAPPDATA%\RadCaseManager\updates\`, **jamais** dans le dossier de
+   l'application ;
+3. en interne : l'ancien exécutable est **déplacé** vers le transit (`…old.exe`),
+   le nouveau **prend sa place**, puis relance et fermeture de l'instance
+   courante ;
+4. le `.old` du transit sert de **retour arrière** et n'est remplacé qu'à la mise
+   à jour suivante.
 
 Avantages : **aucun script externe**, chemin d'exécution inchangé (donc conforme
-aux politiques), raccourci de l'utilisateur toujours valable.
+aux politiques), raccourci de l'utilisateur toujours valable, et **une seule icône
+visible** : aucun fichier de travail n'est créé dans le dossier de l'application.
 
 **Vigilance OneDrive.** Si le Bureau est redirigé vers OneDrive (chemin du type
 `…\OneDrive - <Organisation>\Bureau\…`) :
@@ -286,14 +294,22 @@ Points de conception appliqués :
 - **Détection sans quota** : lecture de la redirection `HEAD /releases/latest`
   (repli sur l'API GitHub en cas d'échec). Intervalle minimal de 24 h, horodaté
   dans `settings.json`.
-- **Téléchargement** vers `<nom>.new.exe` **dans le dossier de l'application**
-  (même volume ⇒ renommage atomique), via `<nom>.new.exe.part` pour ne jamais
-  laisser un exécutable tronqué ; garde-fou de taille (≥ 5 Mo).
-- **Application** : renommage `exe → .old`, puis `staged → exe`, avec quelques
-  tentatives (verrou antivirus) et retour en arrière en cas d'échec ; relance
-  détachée puis fermeture de l'instance courante.
-- **Nettoyage** au démarrage : suppression du `.old` (verrouillé par l'instance
-  précédente) et des `.part` orphelins.
+- **Transit hors du dossier de l'application** : la nouvelle version (`.new` +
+  `.part`) **et** la sauvegarde (`.old`) vivent dans
+  `%LOCALAPPDATA%\RadCaseManager\updates\`, si bien que le Bureau ne montre jamais
+  qu'une seule icône. Repli automatique « à côté de l'exécutable » si ce dossier
+  n'est pas accessible.
+- **Téléchargement** via `<nom>.new.exe.part` puis bascule atomique, pour ne
+  jamais laisser un exécutable tronqué ; garde-fou de taille (≥ 5 Mo).
+- **Application** : déplacement `exe → .old` (dans le transit), puis `staged →
+  exe`, avec quelques tentatives (verrou antivirus, volume différent) et retour en
+  arrière en cas d'échec ; relance détachée puis fermeture de l'instance courante.
+- **Sauvegarde conservée** : le `.old` sert de retour arrière et n'est remplacé
+  qu'à la **mise à jour suivante** — donc jamais pendant qu'un processus le
+  verrouille. C'est ce qui supprime la course qui laissait le fichier traîner.
+- **Nettoyage** au démarrage : seuls les `.part` orphelins sont supprimés ; les
+  restes posés à côté de l'exécutable par l'ancienne mécanique sont nettoyés dès
+  que le dossier de transit est disponible.
 - **Sûreté de threading** : les signaux des workers sont reliés à des **méthodes
   liées de la fenêtre** (jamais des lambdas) — seul moyen pour PySide6 de garantir
   l'exécution dans le thread de l'interface.
@@ -311,6 +327,16 @@ bascule effective du `.exe` en cours d'exécution.
 `APP_VERSION = "v4.0"` — vérifié en décompressant le module `version` du `.exe`
 téléchargé, empreinte SHA-256 concordante avec l'asset publié. Le test de bout en
 bout se fera donc de **`v4.0` vers `v4.1`**.
+
+**`v4.2` — transit hors du dossier de l'application.** Le premier essai réel
+(`v4.0` → `v4.1`, sur poste Windows) a montré le défaut : le `.new` puis le `.old`
+apparaissaient **à côté de l'exécutable**, donc deux icônes sur le Bureau, et le
+`.old` pouvait survivre (purge tentée une seule fois, au démarrage, au moment
+précis où l'ancien processus verrouille encore le fichier). Désormais `.new`,
+`.part` et `.old` vivent dans `%LOCALAPPDATA%\RadCaseManager\updates\`, et la
+sauvegarde n'est remplacée qu'à la mise à jour suivante : plus rien n'est visible,
+plus de course. Repli automatique sur l'ancien comportement si le dossier de
+transit est inaccessible (testé dans les deux cas).
 
 Pistes non retenues pour l'instant : vérification de l'empreinte SHA-256 côté
 client, retour arrière automatique si la nouvelle version ne démarre pas, canal

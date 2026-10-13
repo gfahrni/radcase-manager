@@ -36,7 +36,10 @@ presse-papiers, dans un **dossier réseau partagé**.
   décodé pour l'affichage.
 - `updater.py` : **mise à jour automatique** depuis les releases GitHub (vérif en
   fond 1×/24 h, téléchargement, remplacement de l'exécutable par **renommage** —
-  jamais d'écrasement d'un `.exe` en cours). Aucune dépendance externe.
+  jamais d'écrasement d'un `.exe` en cours). Tout le transit (`.new`, `.part`,
+  `.old`) vit dans `%LOCALAPPDATA%\RadCaseManager\updates\` (`config.UPDATES_DIR`),
+  **jamais** dans le dossier de l'exécutable, pour qu'une seule icône soit visible.
+  Aucune dépendance externe.
 - `version.py` : version de l'application, **inscrite par la CI** au build à partir
   du tag ; un binaire de développement (``…dev``) désactive la mise à jour.
 - `main_gui.py` : interface PySide6 (onglets « Nouveau cas » / « Consulter »).
