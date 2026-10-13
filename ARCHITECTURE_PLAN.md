@@ -159,6 +159,11 @@ posé sur le partage réseau :
   partagé change, il est reconstruit automatiquement au prochain scan.
 - Ordre de grandeur mesuré (1 000 cas, disque local) : scan froid ~0,5 s,
   scan chaud ~0,05 s, recherche filtrée ~0,05 s.
+- **Anti-rebond des scans** : les lectures rapprochées (plusieurs onglets, badge,
+  fil…) partagent un même résultat ; un scan complet de l'arbre n'est déclenché
+  qu'au plus une fois toutes les `storage._REFRESH_TTL_SECONDS` secondes. Les
+  écritures (création/édition/suppression) mettent l'index à jour directement et
+  ne dépendent donc pas de ce délai.
 
 Filtres : collection (👥 publique / 👤 privé / les deux), unités, auteur,
 plage de dates, texte (titre + description).
@@ -166,13 +171,38 @@ plage de dates, texte (titre + description).
 ⚠️ Aucun affichage par défaut : l'onglet « Consulter » ne liste rien tant qu'un
 critère n'est pas saisi (évite de déverser des milliers de lignes).
 
+## 🖥️ Affichage à l'échelle (vignettes + chargement progressif)
+
+Objectif : rester fluide avec des milliers de cas, y compris sur un dossier
+partagé réseau (2000+ cas visés).
+
+- **Vignettes mises en cache** (`thumbnails.py`) : jamais d'image plein format
+  décodée pour l'affichage. La vignette est produite une seule fois, à la taille
+  d'affichage, via `QImageReader.setScaledSize` (décodage **directement réduit**),
+  puis stockée dans le profil local (`settings_data/thumbs/`), jamais sur le
+  partage. La clé inclut le `mtime` et la taille du fichier source : une image
+  modifiée est recalculée automatiquement. Cache **reconstructible** (purge des
+  plus anciennes au-delà de `THUMB_MAX_FILES`).
+- **Chargement progressif** : la Bibliothèque et le Fil ne construisent que la
+  fenêtre visible (paliers `BROWSER_PAGE` / `FEED_PAGE`), complétée au fil du
+  défilement (remontée de l'historique pour le fil). La mémoire reste bornée,
+  indépendamment du nombre de cas.
+- **Recherche rapide** (Bibliothèque) : anti-rebond `QUICK_SEARCH_DEBOUNCE_MS`,
+  pour ne pas reconstruire la grille à chaque frappe.
+
+Mesures (213 cas, disque local, cache de vignettes chaud) : ouverture ~0,3 s et
+changement d'onglet ~0,01–0,05 s (contre ~5 s et ~2,3 s avant). Premier lancement
+(cache de vignettes vide) : ~1 s, le temps de produire les vignettes de la
+fenêtre affichée.
+
 ## 🧩 Modules
 
 | Module | Rôle |
 |---|---|
 | `config.py` | réglages locaux (`settings.json`), chemins |
 | `bootstrap.py` | crée `cases/`, `units.json`, `README.md` si absents |
-| `storage.py` | presse-papiers, `create_case()`, `list_cases()`, `search_cases()` |
+| `storage.py` | `create_case()`, `list_cases()`, `search_cases()` + index local |
+| `thumbnails.py` | cache local des vignettes d'affichage (dérivées, reconstructible) |
 | `main_gui.py` | interface PySide6 (saisie + consultation) |
 
 ## 🛠️ Dépendances

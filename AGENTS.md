@@ -25,8 +25,15 @@ presse-papiers, dans un **dossier réseau partagé**.
 - `bootstrap.py` : init du dossier partagé (`cases/`, `units.json`, `README.md`).
 - `storage.py` : `create_case()`, `update_case()`, `delete_case()`, `list_cases()`,
   `search_cases()`, plus l'**index local** (`settings_data/index.db`, cache
-  reconstructible, maj par mtime).
+  reconstructible, maj par mtime). Scan de l'arbre **anti-rebondi** (TTL) pour
+  qu'une rafale de lectures ne déclenche qu'un seul scan.
+- `thumbnails.py` : cache local des **vignettes d'affichage**
+  (`settings_data/thumbs/`, reconstructible, jamais sur le partage). Décodage à
+  la taille cible via `QImageReader.setScaledSize` : le plein format n'est jamais
+  décodé pour l'affichage.
 - `main_gui.py` : interface PySide6 (onglets « Nouveau cas » / « Consulter »).
+  Bibliothèque et Fil en **chargement progressif** (seule la fenêtre visible est
+  construite) ; recherche rapide avec anti-rebond.
 
 ## Conventions
 - GUI en **PySide6** ; frontmatter en **PyYAML** ; capture image via **QClipboard**

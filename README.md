@@ -103,7 +103,23 @@ git push origin v3.5
 | `config.py` | réglages locaux et chemins |
 | `bootstrap.py` | initialisation du dossier partagé |
 | `storage.py` | création atomique, lecture et recherche des cas |
+| `thumbnails.py` | cache local des vignettes d'affichage |
 | `main_gui.py` | interface PySide6 |
+
+## Performances
+
+Conçue pour rester fluide avec des **milliers de cas** sur un dossier réseau :
+
+- les images ne sont **jamais** décodées en plein format pour l'affichage : des
+  vignettes sont calculées une fois à la taille d'affichage et mises en cache
+  localement (`settings_data/thumbs/`, reconstructible, hors du partage) ;
+- la Bibliothèque et le Fil ne construisent que la **fenêtre visible** et
+  complètent au défilement (mémoire bornée) ;
+- l'index local n'est scanné qu'**une fois par rafale** de lectures (anti-rebond),
+  et les auteurs/unités sont lus par requête SQL ciblée.
+
+Ordre de grandeur (213 cas, disque local) : ouverture ~0,3 s, changement d'onglet
+~0,05 s. Détails dans `ARCHITECTURE_PLAN.md`.
 
 ## Tests backend (sans interface)
 

@@ -21,6 +21,8 @@ import json
 import os
 import shutil
 import sqlite3
+import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -478,6 +480,16 @@ def delete_case(case: "Case") -> bool:
 
 INDEX_SCHEMA_VERSION = "2"
 
+#: Un scan complet de l'arbre ne sert qu'une fois par rafale d'appels : un même
+#: passage d'onglet déclenche plusieurs lectures successives (fil, badge,
+#: auteurs…). On mémorise le dernier scan et on réutilise son résultat tant qu'il
+#: est « frais ». Les écritures (création/édition/suppression) mettent l'index à
+#: jour directement et ne dépendent donc pas de ce délai.
+_REFRESH_TTL_SECONDS = 2.0
+_refresh_lock = threading.Lock()
+#: ``shared_root`` -> (instant monotonic du dernier scan, nombre de cas indexés).
+_last_refresh: Dict[str, tuple] = {}
+
 
 def _index_path() -> Path:
     """Chemin de la base d'index locale (stockée hors du dossier partagé)."""
@@ -591,14 +603,37 @@ def _scan_case_files(shared_root: Path) -> Iterable[tuple]:
                 yield Path(entry.path), entry
 
 
-def refresh_index(shared_root: str | Path) -> int:
+def refresh_index(shared_root: str | Path, *, force: bool = False) -> int:
     """Met à jour l'index local et retourne le nombre de cas indexés.
 
     Ne relit et ne re-parse un ``case.md`` que si sa date de modification ou sa
     taille a changé. Purge les cas disparus. Reconstruit tout si le dossier
     partagé a changé ou si l'index est corrompu.
+
+    Les appels rapprochés (moins de :data:`_REFRESH_TTL_SECONDS`) réutilisent le
+    dernier résultat : une rafale de lectures (plusieurs onglets, badge, fil…)
+    ne provoque qu'**un seul** scan de l'arbre partagé. ``force=True`` impose un
+    scan (rafraîchissement explicite).
     """
     root = Path(shared_root)
+    key = str(root)
+    if not force:
+        cached = _last_refresh.get(key)
+        if cached is not None and (time.monotonic() - cached[0]) < _REFRESH_TTL_SECONDS:
+            return cached[1]
+    with _refresh_lock:
+        # Re-vérification sous verrou : un autre fil a pu scanner entre-temps.
+        if not force:
+            cached = _last_refresh.get(key)
+            if cached is not None and (time.monotonic() - cached[0]) < _REFRESH_TTL_SECONDS:
+                return cached[1]
+        count = _refresh_index_now(root)
+        _last_refresh[key] = (time.monotonic(), count)
+        return count
+
+
+def _refresh_index_now(root: Path) -> int:
+    """Effectue réellement le scan incrémental de ``cases/`` (sans anti-rebond)."""
     try:
         conn = _index_connect()
     except sqlite3.Error:
@@ -781,9 +816,35 @@ def search_cases(
     return results
 
 
+def _visible_columns(shared_root: str | Path, columns: str) -> List[tuple]:
+    """Lit les colonnes demandées dans l'index, cas privés d'autrui exclus.
+
+    Évite de reconstruire des :class:`Case` complets quand seules quelques
+    colonnes sont nécessaires (auteurs, unités…).
+    """
+    root = Path(shared_root)
+    refresh_index(root)
+    conn = _index_connect()
+    try:
+        return conn.execute(
+            f"SELECT {columns} FROM cases_index"
+        ).fetchall()
+    finally:
+        conn.close()
+
+
 def all_unit_tags(shared_root: str | Path, viewer: str = "") -> List[str]:
     """Liste triée de toutes les unités effectivement utilisées dans les cas."""
-    tags = {u for case in list_cases(shared_root, viewer=viewer) for u in case.units}
+    viewer_l = (viewer or "").strip().casefold()
+    tags = set()
+    for units_json, author, visibility in _visible_columns(
+        shared_root, "units, author, visibility"
+    ):
+        if not _row_visible(author, visibility, viewer_l):
+            continue
+        for unit in (json.loads(units_json) if units_json else []):
+            if unit:
+                tags.add(unit)
     return sorted(tags, key=str.casefold)
 
 
@@ -793,9 +854,17 @@ def all_authors(shared_root: str | Path, viewer: str = "") -> List[str]:
     Les cas privés d'autrui sont exclus (``viewer``), pour ne pas révéler leur
     existence via la liste des auteurs.
     """
-    authors = {
-        case.author.strip()
-        for case in list_cases(shared_root, viewer=viewer)
-        if case.author and case.author.strip()
-    }
+    viewer_l = (viewer or "").strip().casefold()
+    authors = set()
+    for author, visibility in _visible_columns(shared_root, "author, visibility"):
+        name = (author or "").strip()
+        if name and _row_visible(author, visibility, viewer_l):
+            authors.add(name)
     return sorted(authors, key=str.casefold)
+
+
+def _row_visible(author: Any, visibility: Any, viewer_l: str) -> bool:
+    """Vrai si une ligne d'index est visible du lecteur (cas privés d'autrui exclus)."""
+    if _normalize_visibility(visibility) != VISIBILITY_PRIVATE:
+        return True
+    return bool(viewer_l) and (author or "").strip().casefold() == viewer_l

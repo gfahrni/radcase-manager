@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 import bootstrap
 import config
 import storage
+import thumbnails
 
 PREVIEW_W, PREVIEW_H = 400, 320
 
@@ -494,9 +495,24 @@ class ConfirmCaseDialog(QDialog):
 CARD_IMG_W, CARD_IMG_H = 150, 112
 CARD_W = CARD_IMG_W + 10
 
+#: Nombre de vignettes construites par palier dans la Bibliothèque : la grille
+#: se remplit au fur et à mesure du défilement (reste fluide à 2000+ cas).
+BROWSER_PAGE = 60
+#: Distance (px) du bas à partir de laquelle on prépare le palier suivant.
+GRID_PREFETCH_PX = 600
+#: Anti-rebond de la recherche rapide (ms) : évite de reconstruire la grille à
+#: chaque frappe pendant la saisie.
+QUICK_SEARCH_DEBOUNCE_MS = 220
+
 #: Dimensions du « Fil d'actualité » (cartes, type réseau social).
 FEED_CARD_W = 420
 FEED_IMG_W, FEED_IMG_H = 387, 267
+
+#: Nombre de cartes du fil construites par palier : le fil se remplit au fur et
+#: à mesure du défilement (reste fluide avec un long historique).
+FEED_PAGE = 40
+#: Distance (px) du haut/bas à partir de laquelle le palier voisin est préparé.
+FEED_PREFETCH_PX = 700
 
 #: Fond d'une carte du fil : normal, ou bleu si le cas est « nouveau » (non lu).
 FEED_CARD_BG = "#1e1e1e"
@@ -562,9 +578,16 @@ class CaseBrowserPage(QWidget):
         self._selected_unit = None      # None = toutes les unités
         self._unit_cases: list = []     # cas de l'unité/visibilité courantes
         self._quick_text = ""           # filtre de recherche rapide (titre)
-        self._card_widgets: list = []   # vignettes actuellement affichées
+        self._card_widgets: list = []   # vignettes construites
         self._empty_label = None        # message si aucun cas
         self._columns = 0               # colonnes courantes (recalculées au resize)
+        self._filtered: list = []       # cas après recherche rapide (triés)
+        self._built = 0                 # nombre de vignettes déjà construites
+        # Anti-rebond : reconstruire la grille à chaque frappe saccade la saisie.
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(QUICK_SEARCH_DEBOUNCE_MS)
+        self._search_timer.timeout.connect(self._refresh_grid)
         self._build_ui()
         self.reload_units()
         self.reload_cases()
@@ -667,6 +690,9 @@ class CaseBrowserPage(QWidget):
         self.grid_layout.setSpacing(12)
         self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.grid_scroll.setWidget(self.grid_container)
+        # Chargement progressif : on construit la suite de la grille en approchant
+        # du bas (avant-dernière page), pour ne jamais matérialiser tout d'un coup.
+        self.grid_scroll.verticalScrollBar().valueChanged.connect(self._on_grid_scroll)
         outer.addWidget(self.grid_scroll, 85)
 
     def reload_units(self) -> None:
@@ -753,36 +779,74 @@ class CaseBrowserPage(QWidget):
         self.reload_cases()
 
     def _on_quick_search(self, text: str) -> None:
-        """Filtre instantanément les cas affichés selon le nom saisi."""
+        """Filtre les cas affichés selon le nom saisi (après une courte pause)."""
         self._quick_text = text or ""
-        self._refresh_grid()
+        self._search_timer.start()  # reconstruit la grille après l'anti-rebond
 
     def _refresh_grid(self) -> None:
-        """Applique le filtre de recherche rapide et reconstruit la grille."""
+        """Applique le filtre de recherche rapide et construit le 1er palier."""
         needle = self._quick_text.strip().casefold()
         cases = [
             case for case in self._unit_cases
             if not needle or needle in case.title.casefold()
         ]
         cases.sort(key=lambda case: case.title.casefold())
+        self._filtered = cases
 
         # Supprime les widgets précédents (vignettes ou message vide).
         self._clear_grid()
         for widget in self._card_widgets:
             widget.deleteLater()
         self._card_widgets = []
+        self._built = 0
         if self._empty_label is not None:
             self._empty_label.deleteLater()
             self._empty_label = None
 
-        if cases:
-            self._card_widgets = [self._make_card(case) for case in cases]
-        else:
+        if not cases:
             empty = QLabel("Aucun cas à afficher.")
             empty.setAlignment(Qt.AlignCenter)
             empty.setStyleSheet("color:#888; padding:24px;")
             self._empty_label = empty
+            self._layout_cards(force=True)
+            return
+        self._build_page()
+
+    def _build_page(self) -> None:
+        """Construit le palier suivant de vignettes (chargement progressif)."""
+        start = self._built
+        end = min(len(self._filtered), start + BROWSER_PAGE)
+        if start >= end:
+            return
+        self._card_widgets.extend(
+            self._make_card(case) for case in self._filtered[start:end]
+        )
+        self._built = end
         self._layout_cards(force=True)
+        # Grille encore non défilable alors qu'il reste des cas : on complète,
+        # sinon le défilement (qui déclenche le palier suivant) ne viendrait pas.
+        if self._built < len(self._filtered):
+            QTimer.singleShot(0, self._fill_viewport)
+
+    def _fill_viewport(self) -> None:
+        """Complète la grille tant qu'elle tient entièrement dans la vue.
+
+        Utilise une estimation déterministe de la hauteur du contenu (et non la
+        position de l'ascenseur, pas encore calculée) : évite tout emballement.
+        """
+        if self._built >= len(self._filtered):
+            return
+        columns = max(1, self._columns)
+        rows = (self._built + columns - 1) // columns
+        estimated_height = rows * (CARD_IMG_H + 56)  # image + titre + espacement
+        if estimated_height < self.grid_scroll.viewport().height():
+            self._build_page()
+
+    def _on_grid_scroll(self, value: int) -> None:
+        """Prépare le palier suivant en approchant du bas de la grille."""
+        bar = self.grid_scroll.verticalScrollBar()
+        if bar.maximum() > 0 and value >= bar.maximum() - GRID_PREFETCH_PX:
+            self._build_page()
 
     def _clear_grid(self) -> None:
         """Détache tous les widgets de la grille (sans les détruire)."""
@@ -831,15 +895,12 @@ class CaseBrowserPage(QWidget):
         thumb.setCursor(Qt.PointingHandCursor)
         thumb.setStyleSheet("background-color: black;")
         thumb.clicked.connect(lambda c=case: self.case_activated.emit(c))
-        pixmap = QPixmap(str(case.image_path)) if case.image_path else QPixmap()
+        pixmap = thumbnails.load_thumbnail(case, CARD_IMG_W, CARD_IMG_H)
         if pixmap.isNull():
             thumb.setText("—")
             thumb.setStyleSheet("background-color:#1e1e1e; color:#777;")
         else:
-            thumb.setPixmap(
-                pixmap.scaled(CARD_IMG_W, CARD_IMG_H, Qt.KeepAspectRatio,
-                              Qt.SmoothTransformation)
-            )
+            thumb.setPixmap(pixmap)
         column.addWidget(thumb, 0, Qt.AlignHCenter)
 
         title = QLabel(case.title)
@@ -893,6 +954,10 @@ class FeedView(QWidget):
         self._unread_ids: set = set()       # cas « nouveaux » (fond bleu)
         self._seen_ids: set = set()         # cas déjà passés dans la zone visible
         self._cards_by_id: dict = {}        # id de cas -> carte
+        self._cases: list = []              # cas du fil (ancien → récent)
+        self._win_start = 0                 # borne basse de la fenêtre construite
+        self._win_end = 0                   # borne haute (exclue)
+        self._extending = False             # garde anti-réentrance (extension)
         self.scroll.verticalScrollBar().rangeChanged.connect(self._on_range_changed)
         self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
@@ -926,31 +991,32 @@ class FeedView(QWidget):
     def set_settings(self, settings: config.Settings) -> None:
         self.settings = settings
 
-    def load(self, anchor=None, units=None, unread_ids=None, case_types=None) -> None:
-        """Reconstruit le fil, du plus ancien (haut) au plus récent (bas).
+    def load(self, anchor=None, units=None, unread_ids=None, case_types=None,
+             cases=None) -> None:
+        """Reconstruit le fil autour de l'instant d'ancrage (fenêtre progressive).
 
-        ``anchor`` : instant sur lequel se positionner à l'ouverture (tous les cas
-        restent affichés : on remonte pour l'historique) ; ``None`` = le plus
-        récent (bas). ``units`` : unités suivies (``None`` = toutes).
+        Seules les cartes de la fenêtre courante sont construites ; les plus
+        anciennes sont préparées en remontant, les plus récentes en descendant.
+
+        ``anchor`` : instant sur lequel se positionner à l'ouverture ; ``None`` =
+        le plus récent (bas). ``units`` : unités suivies (``None`` = toutes).
         ``unread_ids`` : identifiants des cas « nouveaux » (carte à fond bleu).
         ``case_types`` : types de cas à afficher (``None`` = tous).
+        ``cases`` : cas déjà chargés (évite un second scan) ; ``None`` les charge.
         """
         self._unread_ids = set(unread_ids or ())
         self._seen_ids = set()
         self._cards_by_id = {}
-        while self.vbox.count():
-            item = self.vbox.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        self._clear_view()
 
-        try:
-            cases = storage.search_cases(
-                self.settings.shared_root,
-                viewer=self.settings.user_name,
-            )
-        except Exception:  # noqa: BLE001 (vue best-effort)
-            cases = []
+        if cases is None:
+            try:
+                cases = storage.search_cases(
+                    self.settings.shared_root,
+                    viewer=self.settings.user_name,
+                )
+            except Exception:  # noqa: BLE001 (vue best-effort)
+                cases = []
 
         if units is not None:
             wanted = {u.casefold() for u in units}
@@ -959,6 +1025,7 @@ class FeedView(QWidget):
             cases = [c for c in cases if c.case_type in case_types]
 
         cases.sort(key=lambda case: case.date_added)  # ancien (haut) → récent (bas)
+        self._cases = cases
 
         if not cases:
             empty = QLabel("Aucun cas à afficher.")
@@ -968,33 +1035,131 @@ class FeedView(QWidget):
             self.vbox.addStretch()
             self._pending_scroll_widget = None
             self._scroll_pending = False
+            self._win_start = self._win_end = 0
             return
 
         anchor_iso = anchor.isoformat(timespec="seconds") if anchor else None
-        last_day = None
-        anchor_widget = None
-        for case in cases:
-            day = (case.date_added or "")[:10]
-            if day and day != last_day:
-                last_day = day
-                self.vbox.addWidget(self._date_separator(case), 0, Qt.AlignHCenter)
-            card = self._make_feed_card(case)
-            self.vbox.addWidget(card, 0, Qt.AlignHCenter)
-            self._cards_by_id[case.id] = card
-            # Dernière carte au plus tard à l'instant d'ancrage = point de départ.
+        # Dernière carte au plus tard à l'instant d'ancrage = point de départ.
+        anchor_idx = -1
+        for index, case in enumerate(cases):
             if anchor_iso and (case.date_added or "") <= anchor_iso:
-                anchor_widget = card
+                anchor_idx = index
+            elif anchor_iso:
+                break
+        if anchor_idx < 0:
+            # Ancre plus ancienne que tout le fil : on montre le début.
+            self._win_start, self._win_end = 0, min(len(cases), FEED_PAGE)
+            anchor_widget = None
+        else:
+            self._win_end = anchor_idx + 1
+            self._win_start = max(0, self._win_end - FEED_PAGE)
+            anchor_widget = None  # renseigné ci-dessous (carte construite)
+
+        for widget in self._build_range(self._win_start, self._win_end):
+            self.vbox.addWidget(widget, 0, Qt.AlignHCenter)
         self.vbox.addStretch()
 
+        if anchor_idx >= 0:
+            anchor_widget = self._cards_by_id.get(cases[anchor_idx].id)
         self._pending_scroll_widget = anchor_widget
         self._scroll_pending = True
         self._scroll_attempts = 0
         QTimer.singleShot(0, self._apply_pending_scroll)
 
+    def _clear_view(self) -> None:
+        """Retire tous les widgets du fil (sans détruire la fenêtre)."""
+        while self.vbox.count():
+            item = self.vbox.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _build_range(self, start: int, end: int) -> list:
+        """Construit les widgets (séparateurs + cartes) pour ``cases[start:end]``.
+
+        Le séparateur de jour n'est posé que si la date diffère de la carte
+        précédente (comparaison sur la liste complète), ce qui reste correct
+        lorsqu'on ajoute un palier au-dessus ou en dessous.
+        """
+        widgets: list = []
+        for index in range(start, end):
+            case = self._cases[index]
+            day = (case.date_added or "")[:10]
+            previous_day = (
+                (self._cases[index - 1].date_added or "")[:10] if index > 0 else None
+            )
+            if day and day != previous_day:
+                widgets.append(self._date_separator(case))
+            card = self._make_feed_card(case)
+            self._cards_by_id[case.id] = card
+            widgets.append(card)
+        return widgets
+
+    def _maybe_extend(self) -> None:
+        """Prépare le(s) palier(s) voisin(s) quand on approche du haut ou du bas.
+
+        Boucle protégée par une garde : les signaux de défilement déclenchés par
+        l'insertion de widgets ne relancent pas la procédure.
+        """
+        if self._extending:
+            return
+        self._extending = True
+        try:
+            while True:
+                bar = self.scroll.verticalScrollBar()
+                if bar.maximum() <= 0:
+                    break
+                if bar.value() <= FEED_PREFETCH_PX and self._win_start > 0:
+                    before = self._win_start
+                    self._prepend_older()
+                    if self._win_start == before:
+                        break
+                    continue
+                if (
+                    bar.value() >= bar.maximum() - FEED_PREFETCH_PX
+                    and self._win_end < len(self._cases)
+                ):
+                    before = self._win_end
+                    self._append_newer()
+                    if self._win_end == before:
+                        break
+                    continue
+                break
+        finally:
+            self._extending = False
+
+    def _prepend_older(self) -> None:
+        """Ajoute un palier d'historique au-dessus, en gardant la vue stable."""
+        new_start = max(0, self._win_start - FEED_PAGE)
+        block = self._build_range(new_start, self._win_start)
+        if not block:
+            return
+        bar = self.scroll.verticalScrollBar()
+        previous_value = bar.value()
+        added_height = 0
+        for offset, widget in enumerate(block):
+            self.vbox.insertWidget(offset, widget, 0, Qt.AlignHCenter)
+            added_height += widget.sizeHint().height() + self.vbox.spacing()
+        self._win_start = new_start
+        # Le contenu a grandi vers le haut : on décale d'autant pour ne pas sauter.
+        bar.setValue(previous_value + added_height)
+
+    def _append_newer(self) -> None:
+        """Ajoute un palier de cas plus récents en dessous (avant l'étirement)."""
+        new_end = min(len(self._cases), self._win_end + FEED_PAGE)
+        block = self._build_range(self._win_end, new_end)
+        if not block:
+            return
+        stretch_index = self.vbox.count() - 1  # dernier item = étirement final
+        for offset, widget in enumerate(block):
+            self.vbox.insertWidget(stretch_index + offset, widget, 0, Qt.AlignHCenter)
+        self._win_end = new_end
+
     # --- Cas « nouveaux » (fond bleu) ------------------------------------- #
     def _on_scroll(self, _value: int) -> None:
-        """À chaque défilement : marque lues les cartes entrées dans la vue."""
+        """À chaque défilement : marque lues les cartes vues et prépare la suite."""
         self._mark_visible_read()
+        self._maybe_extend()
 
     def _mark_visible_read(self) -> None:
         """Marque lues les cartes « nouvelles » déjà vues puis sorties de l'écran.
@@ -1092,15 +1257,12 @@ class FeedView(QWidget):
         image.setCursor(Qt.PointingHandCursor)
         image.setStyleSheet("background:black; border-radius:6px;")
         image.clicked.connect(lambda c=case: self._on_image_clicked(c))
-        pixmap = QPixmap(str(case.image_path)) if case.image_path else QPixmap()
+        pixmap = thumbnails.load_thumbnail(case, FEED_IMG_W, FEED_IMG_H)
         if pixmap.isNull():
             image.setText("—")
             image.setStyleSheet("background:#111; color:#777; border-radius:6px;")
         else:
-            image.setPixmap(
-                pixmap.scaled(FEED_IMG_W, FEED_IMG_H, Qt.KeepAspectRatio,
-                              Qt.SmoothTransformation)
-            )
+            image.setPixmap(pixmap)
         column.addWidget(image, 0, Qt.AlignHCenter)
 
         title = QLabel(case.title)
@@ -1179,7 +1341,7 @@ class MainWindow(QMainWindow):
         self._feed_timer.setInterval(FEED_BADGE_INTERVAL_MS)
         self._feed_timer.timeout.connect(self._update_feed_badge)
         self._feed_timer.start()
-        self._update_feed_badge()
+        self._update_feed_badge(getattr(self, "_feed_cases", None))
 
     def _build_status_bar(self) -> None:
         """Barre de statut : rouage (paramètres) + nom d'utilisateur / dossier."""
@@ -1209,11 +1371,25 @@ class MainWindow(QMainWindow):
             text += f" ({count})"
         self.tabs.setTabText(self.feed_tab_index, text)
 
-    def _unread_cases(self) -> list:
+    def _load_visible_cases(self) -> list:
+        """Charge les cas visibles pour l'utilisateur courant (best-effort).
+
+        Centralise l'accès à l'index pour qu'un même passage d'onglet ne
+        déclenche qu'un seul chargement, réutilisé par le fil et son badge.
+        """
+        try:
+            return storage.search_cases(
+                self.settings.shared_root, viewer=self.settings.user_name
+            )
+        except Exception:  # noqa: BLE001 (vue best-effort)
+            return []
+
+    def _unread_cases(self, cases=None) -> list:
         """Cas du fil « nouveaux » (non lus) pour la session courante.
 
         Nouveau = visible, dans une unité suivie, plus récent que le filigrane de
         session, hors mes propres cas, et pas encore lu cette session.
+        ``cases`` : liste déjà chargée (évite un second scan) ; ``None`` la charge.
         """
         units = self.selected_feed_units()
         if not units:
@@ -1223,12 +1399,8 @@ class MainWindow(QMainWindow):
         types = checked_case_types(boxes) if boxes is not None else None
         since = self._feed_session_watermark or ""
         me = (self.settings.user_name or "").strip().casefold()
-        try:
-            cases = storage.search_cases(
-                self.settings.shared_root, viewer=self.settings.user_name
-            )
-        except Exception:  # noqa: BLE001 (badge best-effort)
-            return []
+        if cases is None:
+            cases = self._load_visible_cases()
         result = []
         for case in cases:
             if not (wanted & {u.casefold() for u in case.units}):
@@ -1248,7 +1420,9 @@ class MainWindow(QMainWindow):
         """Une carte vient d'être lue (scroll ou clic) : met à jour le badge."""
         if case_id and case_id not in self._feed_read_ids:
             self._feed_read_ids.add(case_id)
-            self._update_feed_badge()
+            # La liste des cas n'a pas changé : on réutilise le dernier chargement
+            # (évite une recherche à chaque carte marquée lue pendant le défilement).
+            self._update_feed_badge(getattr(self, "_feed_cases", None))
 
     def _on_feed_case_activated(self, case) -> None:
         """Clic sur l'image d'une carte : marque lu, puis ouvre le zoom détail."""
@@ -1256,9 +1430,15 @@ class MainWindow(QMainWindow):
             self._on_feed_case_read(case.id)
             self._show_case_detail(case)
 
-    def _update_feed_badge(self) -> None:
-        """Pastille = nombre de cartes du fil encore « nouvelles » (non lues)."""
-        count = len(self._unread_cases())
+    def _update_feed_badge(self, cases=None) -> None:
+        """Pastille = nombre de cartes du fil encore « nouvelles » (non lues).
+
+        ``cases`` : liste déjà chargée (réutilisée) ; ``None`` la recharge (appel
+        périodique, qui doit voir les cas ajoutés par les autres).
+        """
+        if cases is None:
+            cases = self._load_visible_cases()
+        count = len(self._unread_cases(cases))
         self.set_feed_dot(FEED_DOT_NOTIFY if count else FEED_DOT_EMOJI, count)
 
     # --- Synchronisation ponctuelle du presse-papiers (activation / onglet) ---
@@ -1301,7 +1481,7 @@ class MainWindow(QMainWindow):
             self.settings.feed_last_seen = datetime.now().isoformat(timespec="seconds")
             config.save_settings(self.settings)
             self.reload_feed_units()
-            self._update_feed_badge()
+            self._update_feed_badge(getattr(self, "_feed_cases", None))
         elif index == self.public_list_tab_index:
             self.browser.reload_units()
             self.browser.reload_cases()
@@ -1547,12 +1727,15 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "feed_view"):
             return
         anchor = self._feed_anchor_datetime(self._active_feed_anchor())
-        unread = {case.id for case in self._unread_cases()}
+        cases = self._load_visible_cases()  # un seul chargement pour le fil + le badge
+        self._feed_cases = cases
+        unread = {case.id for case in self._unread_cases(cases)}
         self.feed_view.load(
             anchor,
             units=self.selected_feed_units(),
             unread_ids=unread,
             case_types=self.selected_feed_case_types(),
+            cases=cases,
         )
 
     # --- Onglet « Nouveau cas » ------------------------------------------- #
