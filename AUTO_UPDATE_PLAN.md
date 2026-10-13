@@ -307,9 +307,13 @@ Points de conception appliqués :
 - **Sauvegarde conservée** : le `.old` sert de retour arrière et n'est remplacé
   qu'à la **mise à jour suivante** — donc jamais pendant qu'un processus le
   verrouille. C'est ce qui supprime la course qui laissait le fichier traîner.
-- **Nettoyage** au démarrage : seuls les `.part` orphelins sont supprimés ; les
-  restes posés à côté de l'exécutable par l'ancienne mécanique sont nettoyés dès
-  que le dossier de transit est disponible.
+- **Nettoyage** : les `.part` orphelins sont supprimés, et les restes visibles à
+  côté de l'exécutable (ancienne mécanique) partent à la **corbeille** — tentative
+  au démarrage puis **réessais différés** (un antivirus peut tenir le fichier
+  quelques instants).
+- **Reconnaissance des restes** : préfixe `RadCaseManager` + marqueur `.new`/`.old`
+  (les fichiers renommés par le navigateur sont donc traités aussi) ; l'exécutable
+  courant et la sauvegarde officielle sont toujours épargnés.
 - **Sûreté de threading** : les signaux des workers sont reliés à des **méthodes
   liées de la fenêtre** (jamais des lambdas) — seul moyen pour PySide6 de garantir
   l'exécution dans le thread de l'interface.
@@ -337,6 +341,16 @@ précis où l'ancien processus verrouille encore le fichier). Désormais `.new`,
 sauvegarde n'est remplacée qu'à la mise à jour suivante : plus rien n'est visible,
 plus de course. Repli automatique sur l'ancien comportement si le dossier de
 transit est inaccessible (testé dans les deux cas).
+
+**`v4.3` — nettoyage par la corbeille, avec réessais.** Le `.old` laissé par
+l'ancienne mécanique pouvait rester « coincé » sur le Bureau : la purge était un
+unique `unlink` silencieux, et un fichier encore tenu par l'antivirus fait échouer
+cet appel sans que personne ne réessaie. Désormais les restes visibles à côté de
+l'exécutable partent à la **corbeille** (`send2trash` : réversible, donc sans
+risque de perte) et le nettoyage est **retenté** 3 s, 15 s, 45 s, 2 min puis 5 min
+après le démarrage. La reconnaissance des fichiers est élargie (`.old`/`.new`, y
+compris renommés par le navigateur) ; l'exécutable courant et la sauvegarde
+officielle ne sont jamais touchés.
 
 Pistes non retenues pour l'instant : vérification de l'empreinte SHA-256 côté
 client, retour arrière automatique si la nouvelle version ne démarre pas, canal

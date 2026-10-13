@@ -36,6 +36,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from send2trash import send2trash
+
 import config
 
 #: Dépôt GitHub qui publie les releases.
@@ -172,6 +174,42 @@ def _silent_unlink(path: Path) -> None:
         path.unlink()
     except OSError:
         pass
+
+
+def _discard(path: Path) -> None:
+    """Écarte un fichier visible : **corbeille** si possible, suppression sinon.
+
+    La corbeille est préférée pour un fichier que l'utilisateur peut voir : rien
+    n'est perdu, et un fichier encore verrouillé échoue proprement au lieu d'être
+    effacé à moitié.
+    """
+    try:
+        send2trash(str(path))
+    except OSError:
+        _silent_unlink(path)
+
+
+def leftover_files() -> list:
+    """Fichiers laissés par une mise à jour dans le dossier de l'exécutable.
+
+    On reconnaît nos fichiers au préfixe ``RadCaseManager`` et au marqueur
+    ``.new`` / ``.old``, **y compris si le fichier a été renommé** par le
+    navigateur (``RadCaseManager (1).old.exe``). L'exécutable courant et la
+    sauvegarde officielle (dossier de transit) sont exclus.
+    """
+    exe = exe_path()
+    canonical = backup_path()
+    marker = config.APP_NAME.lower()
+    found = []
+    for path in exe.parent.iterdir():
+        if path == exe or path == canonical or not path.is_file():
+            continue
+        name = path.name.lower()
+        if not name.startswith(marker):
+            continue
+        if ".new." in name or ".old." in name or name.endswith((".new", ".old")):
+            found.append(path)
+    return found
 
 
 def _move_into_place(source: Path, target: Path) -> None:
@@ -365,34 +403,28 @@ def pending_update() -> Path | None:
 
 
 def cleanup() -> None:
-    """Nettoie les restes de mise à jour (à appeler au démarrage).
+    """Nettoie les restes de mise à jour (au démarrage, puis en différé).
 
     - ``.part`` : téléchargement interrompu → **supprimé** ;
-    - ``.new``  : mise à jour téléchargée mais pas encore appliquée → **conservée**
-      (elle est proposée à l'utilisateur) ;
-    - ``.old``  : sauvegarde de retour arrière → **conservée** ; elle n'est
-      remplacée qu'au moment de la mise à jour suivante, des jours plus tard, ce
-      qui évite tout verrou de fichier (l'ancienne version avait alors quitté
-      depuis longtemps).
+    - ``.new`` posé à côté de l'exécutable : reste de l'ancienne mécanique (la
+      mise à jour en attente vit désormais dans le dossier de transit) → corbeille ;
+    - ``.old`` du dossier de transit : sauvegarde de retour arrière → **conservée**,
+      elle n'est remplacée qu'au moment de la mise à jour suivante, ce qui évite
+      tout verrou de fichier.
 
-    Les fichiers posés **à côté** de l'exécutable (ancienne mécanique) sont
-    nettoyés dès que le dossier de transit est disponible, pour que le Bureau ne
-    montre jamais plus d'une icône.
+    Les fichiers visibles à côté de l'exécutable partent à la **corbeille**, pour
+    que le dossier de l'application ne montre jamais qu'une seule icône. À
+    rappeler plus tard (voir ``leftover_files()``) : un antivirus peut tenir le
+    fichier au démarrage et faire échouer la première tentative.
     """
     if not getattr(sys, "frozen", False):
         return
     exe = exe_path()
-    transit = _transit_dir()
-    for directory in {path for path in (transit, exe.parent) if path is not None}:
+    for leftover in leftover_files():
+        _discard(leftover)
+    for directory in {path for path in (_transit_dir(), exe.parent) if path is not None}:
         for leftover in directory.glob(f"{exe.stem}*.part"):
             _silent_unlink(leftover)
-    if transit is not None and transit != exe.parent:
-        for pattern in (
-            f"{exe.stem}.new{exe.suffix}",
-            f"{exe.stem}.old{exe.suffix}",
-        ):
-            for leftover in exe.parent.glob(pattern):
-                _silent_unlink(leftover)
 
 
 # --------------------------------------------------------------------------- #

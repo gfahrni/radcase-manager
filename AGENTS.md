@@ -39,7 +39,9 @@ presse-papiers, dans un **dossier réseau partagé**.
   jamais d'écrasement d'un `.exe` en cours). Tout le transit (`.new`, `.part`,
   `.old`) vit dans `%LOCALAPPDATA%\RadCaseManager\updates\` (`config.UPDATES_DIR`),
   **jamais** dans le dossier de l'exécutable, pour qu'une seule icône soit visible.
-  Aucune dépendance externe.
+  Les restes visibles à côté de l'exécutable partent à la **corbeille**
+  (`send2trash`), avec réessais différés après le démarrage.
+  Aucune dépendance externe (hors `send2trash`, déjà requis).
 - `version.py` : version de l'application, **inscrite par la CI** au build à partir
   du tag ; un binaire de développement (``…dev``) désactive la mise à jour.
 - `main_gui.py` : interface PySide6 (onglets « Nouveau cas » / « Consulter »).

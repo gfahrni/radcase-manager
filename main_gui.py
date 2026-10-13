@@ -68,6 +68,10 @@ FEED_BADGE_INTERVAL_MS = 5 * 60 * 1000
 #: laisse la fenêtre s'afficher et l'interface se stabiliser.
 UPDATE_CHECK_DELAY_MS = 4000
 
+#: Délais (ms) des tentatives de nettoyage des restes de mise à jour après le
+#: démarrage : la première peut échouer (fichier encore tenu par l'antivirus).
+LEFTOVER_CLEANUP_DELAYS_MS = (3000, 15000, 45000, 120000, 300000)
+
 #: Message affiché quand la mise à jour n'est pas applicable (mode développement).
 UPDATE_UNAVAILABLE = (
     "La mise à jour automatique concerne l'application installée (le fichier "
@@ -1487,6 +1491,12 @@ class MainWindow(QMainWindow):
         self._check_silent = False
         self._pending_tag = ""
         QTimer.singleShot(UPDATE_CHECK_DELAY_MS, self._auto_check_updates)
+
+        # Restes d'une mise à jour précédente, à côté de l'exécutable : on retente
+        # leur mise à la corbeille à intervalles espacés, la première tentative au
+        # démarrage pouvant se heurter à un verrou (antivirus).
+        self._cleanup_delays = list(LEFTOVER_CLEANUP_DELAYS_MS)
+        QTimer.singleShot(self._cleanup_delays.pop(0), self._retry_leftover_cleanup)
 
     def _build_status_bar(self) -> None:
         """Barre de statut : rouage (paramètres) + nom d'utilisateur / dossier."""
@@ -2997,6 +3007,18 @@ class MainWindow(QMainWindow):
             return
         if updater.should_auto_check(self.settings):
             self.check_updates(silent=True)
+
+    def _retry_leftover_cleanup(self) -> None:
+        """Retente de mettre à la corbeille les restes d'une mise à jour.
+
+        Le premier passage a lieu au tout début de ``main()`` ; s'il échoue (fichier
+        encore tenu par un antivirus), on réessaie à intervalles espacés.
+        """
+        if not updater.leftover_files():
+            return
+        updater.cleanup()
+        if updater.leftover_files() and self._cleanup_delays:
+            QTimer.singleShot(self._cleanup_delays.pop(0), self._retry_leftover_cleanup)
 
     def check_updates(self, silent: bool = False) -> None:
         """Cherche une version plus récente (menu « Aide » ou vérification auto).

@@ -118,6 +118,9 @@ L'application installée se met à jour **d'elle-même** depuis les releases Git
   et n'est remplacé qu'à la mise à jour suivante — ce qui évite tout verrou de
   fichier. Aucun script externe n'est lancé : tout se passe dans le processus déjà
   autorisé à s'exécuter.
+- Si un fichier de mise à jour traîne à côté de l'exécutable (reste des versions
+  antérieures à la v4.2), il est **mis à la corbeille** au démarrage, avec des
+  réessais différés : un antivirus peut tenir le fichier quelques instants.
 
 La version embarquée est **inscrite par la CI** dans `version.py` au moment du
 build, à partir du tag. Un binaire de développement (version contenant `dev`, ou
