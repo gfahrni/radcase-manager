@@ -27,6 +27,14 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+#: Version de l'application. La CI réécrit ``version.py`` au moment du build pour
+#: y inscrire le tag de la release ; en développement, la valeur par défaut
+#: contient ``dev`` et désactive le vérificateur de mises à jour.
+try:
+    from version import APP_VERSION
+except ImportError:  # pragma: no cover - fichier absent (exécution isolée)
+    APP_VERSION = "0.0.0.dev"
+
 #: Nom du dossier applicatif dans le profil utilisateur.
 APP_NAME = "RadCaseManager"
 
@@ -99,6 +107,10 @@ DEFAULT_SETTINGS = {
     "last_browser_unit": "",
     "feed_units": None,
     "feed_last_seen": "",
+    #: Vérifier l'existence d'une nouvelle version au démarrage (au plus 1×/24 h).
+    "auto_check_updates": True,
+    #: Horodatage ISO de la dernière vérification de mise à jour réussie.
+    "last_update_check": "",
 }
 
 
@@ -115,6 +127,10 @@ class Settings:
     feed_units: list | None = None
     #: Horodatage de la dernière visite du fil (soft reset du badge de nouveauté).
     feed_last_seen: str = ""
+    #: Recherche automatique de mises à jour au démarrage.
+    auto_check_updates: bool = True
+    #: Horodatage ISO de la dernière vérification réussie (anti-rebond 24 h).
+    last_update_check: str = ""
 
     @property
     def is_configured(self) -> bool:
@@ -136,6 +152,10 @@ def load_settings() -> Settings:
         settings.last_units = []
     if not isinstance(settings.feed_last_seen, str):
         settings.feed_last_seen = ""
+    if not isinstance(settings.auto_check_updates, bool):
+        settings.auto_check_updates = True
+    if not isinstance(settings.last_update_check, str):
+        settings.last_update_check = ""
     # Nom d'auteur : à défaut de valeur enregistrée, on prend celui de la session.
     if not settings.user_name.strip():
         settings.user_name = session_user_name()

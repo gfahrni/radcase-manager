@@ -206,6 +206,8 @@ fenêtre affichée.
 | `bootstrap.py` | crée `cases/`, `units.json`, `users.json`, `README.md` si absents |
 | `storage.py` | `create_case()`, `list_cases()`, `search_cases()` + index local |
 | `thumbnails.py` | cache local des vignettes d'affichage (dérivées, reconstructible) |
+| `updater.py` | mise à jour automatique depuis les releases GitHub (stdlib seule) |
+| `version.py` | version de l'application, inscrite par la CI au build |
 | `main_gui.py` | interface PySide6 (saisie + consultation) |
 
 ## 🛠️ Dépendances
@@ -213,6 +215,7 @@ fenêtre affichée.
 - `PySide6` (GUI + presse-papiers + encodage JPEG des images)
 - `PyYAML` (frontmatter)
 - `sqlite3` (stdlib, utilisé pour l'index local `settings_data/index.db`)
+- `urllib` (stdlib, utilisé pour les mises à jour — aucune dépendance ajoutée)
 
 ## 🏁 Roadmap V3
 
@@ -220,3 +223,6 @@ fenêtre affichée.
 2. **Phase 2 — Moteur** : `storage.py` (création atomique + lecture + recherche).
 3. **Phase 3 — Interface** : `main_gui.py` (saisie, collage presse-papiers, consultation).
 4. **Phase 4 — Distribution** : binaire portable Windows via PyInstaller.
+5. **Phase 5 — Mise à jour** : `updater.py` (mises à jour automatiques depuis les
+   releases GitHub ; remplacement de l'exécutable par renommage, sans script
+   externe). Justification détaillée dans `AUTO_UPDATE_PLAN.md`.

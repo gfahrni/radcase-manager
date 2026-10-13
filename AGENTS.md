@@ -34,6 +34,11 @@ presse-papiers, dans un **dossier réseau partagé**.
   (`settings_data/thumbs/`, reconstructible, jamais sur le partage). Décodage à
   la taille cible via `QImageReader.setScaledSize` : le plein format n'est jamais
   décodé pour l'affichage.
+- `updater.py` : **mise à jour automatique** depuis les releases GitHub (vérif en
+  fond 1×/24 h, téléchargement, remplacement de l'exécutable par **renommage** —
+  jamais d'écrasement d'un `.exe` en cours). Aucune dépendance externe.
+- `version.py` : version de l'application, **inscrite par la CI** au build à partir
+  du tag ; un binaire de développement (``…dev``) désactive la mise à jour.
 - `main_gui.py` : interface PySide6 (onglets « Nouveau cas » / « Consulter »).
   Bibliothèque et Fil en **chargement progressif** (seule la fenêtre visible est
   construite) ; recherche rapide avec anti-rebond.

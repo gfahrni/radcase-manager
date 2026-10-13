@@ -98,6 +98,31 @@ git tag -a v3.5 -m "RadCase Manager v3.5"
 git push origin v3.5
 ```
 
+## Mise à jour automatique
+
+L'application installée se met à jour **d'elle-même** depuis les releases GitHub
+(module `updater.py`) : les radiologues n'ont rien à télécharger ni à lire.
+
+- Au démarrage, elle vérifie en tâche de fond la **dernière release publiée** (au
+  plus une fois par jour) : le tag est lu via la redirection de
+  `/releases/latest`, ce qui n'est soumis à aucun quota d'API.
+- Si une version plus récente existe, elle propose de la télécharger (menu
+  **Aide → Vérifier les mises à jour…** pour forcer la vérification).
+- L'exécutable téléchargé est posé à côté de l'application puis **prend sa place
+  par renommage** (Windows interdit d'écraser un `.exe` en cours d'exécution, mais
+  autorise à le renommer). L'ancienne version est conservée en `.old` comme
+  sauvegarde, puis supprimée au démarrage suivant. Aucun script externe n'est
+  lancé : tout se passe dans le processus déjà autorisé à s'exécuter.
+
+La version embarquée est **inscrite par la CI** dans `version.py` au moment du
+build, à partir du tag. Un binaire de développement (version contenant `dev`, ou
+exécution depuis les sources) ne vérifie jamais les mises à jour.
+
+> Déploiement : l'exécutable est posé sur le **Bureau** de chaque utilisateur,
+> seul emplacement où les applications sont autorisées à s'exécuter. Comme le
+> Bureau est modifiable, l'application peut s'y remplacer elle-même sans droits
+> administrateur. Voir `AUTO_UPDATE_PLAN.md`.
+
 ## Structure du projet
 
 | Fichier | Rôle |
@@ -106,6 +131,8 @@ git push origin v3.5
 | `bootstrap.py` | initialisation du dossier partagé |
 | `storage.py` | création atomique, lecture et recherche des cas |
 | `thumbnails.py` | cache local des vignettes d'affichage |
+| `updater.py` | mise à jour automatique depuis les releases GitHub |
+| `version.py` | version de l'application (inscrite par la CI au build) |
 | `main_gui.py` | interface PySide6 |
 
 ## Performances
@@ -141,9 +168,18 @@ case = storage.create_case(
 print(case.folder)
 ```
 
+Le module `updater` se teste également en ligne de commande :
+
+```bash
+python updater.py check       # version locale vs dernière release publiée
+python updater.py download    # télécharge l'exécutable dans le dossier courant
+```
+
 ## Feuille de route
 
 - [x] Fondation (structure + réglages)
 - [x] Moteur de données (création atomique + recherche)
 - [x] Interface (saisie + consultation)
 - [x] Binaire portable Windows (PyInstaller) — voir `build_windows.bat`
+- [x] Mise à jour automatique depuis les releases GitHub — voir `updater.py` et
+  `AUTO_UPDATE_PLAN.md`

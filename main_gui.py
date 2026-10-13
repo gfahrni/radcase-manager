@@ -12,7 +12,7 @@ import csv
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QDate, QEvent, QFileInfo, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QDate, QEvent, QFileInfo, QObject, QPoint, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QIcon, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QRadioButton,
     QScrollArea,
@@ -51,6 +52,7 @@ import bootstrap
 import config
 import storage
 import thumbnails
+import updater
 
 PREVIEW_W, PREVIEW_H = 400, 320
 
@@ -61,6 +63,72 @@ FEED_DOT_NOTIFY = "🔵"
 
 #: Intervalle de vérification du badge de nouveauté du fil (millisecondes).
 FEED_BADGE_INTERVAL_MS = 5 * 60 * 1000
+
+#: Délai avant la recherche automatique de mise à jour (millisecondes) : on
+#: laisse la fenêtre s'afficher et l'interface se stabiliser.
+UPDATE_CHECK_DELAY_MS = 4000
+
+#: Message affiché quand la mise à jour n'est pas applicable (mode développement).
+UPDATE_UNAVAILABLE = (
+    "La mise à jour automatique concerne l'application installée (le fichier "
+    ".exe). En mode développement, elle est désactivée."
+)
+
+
+# --------------------------------------------------------------------------- #
+# Mise à jour : tâches de fond
+# --------------------------------------------------------------------------- #
+class UpdateCheckWorker(QObject):
+    """Cherche en tâche de fond une version plus récente de l'application."""
+
+    #: Tag de la version disponible ("" si l'application est à jour).
+    finished = Signal(str)
+    #: Message d'erreur (réseau, etc.).
+    failed = Signal(str)
+
+    def run(self) -> None:
+        try:
+            tag = updater.check()
+        except Exception as exc:  # noqa: BLE001 - toute erreur est non fatale
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(tag)
+
+
+class UpdateDownloadWorker(QObject):
+    """Télécharge en tâche de fond l'exécutable de la release demandée."""
+
+    #: Octets reçus, octets annoncés (0 si inconnu).
+    progress = Signal(int, int)
+    finished = Signal()
+    failed = Signal(str)
+
+    def __init__(self, tag: str, dest):
+        super().__init__()
+        self._tag = tag
+        self._dest = dest
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Demande l'interruption du téléchargement (appelé depuis l'UI)."""
+        self._cancelled = True
+
+    def run(self) -> None:
+        def report(received: int, total: int) -> None:
+            if self._cancelled:
+                raise updater.UpdateError("Téléchargement annulé.")
+            self.progress.emit(received, total)
+
+        try:
+            updater.download(self._tag, dest=self._dest, progress=report)
+        except Exception as exc:  # noqa: BLE001 - remonté à l'interface
+            self.failed.emit(str(exc))
+            return
+        if self._cancelled:  # annulation tardive : le fichier complet est écarté
+            self._dest.unlink(missing_ok=True)
+            self.failed.emit("Téléchargement annulé.")
+            return
+        self.finished.emit()
 
 
 # --------------------------------------------------------------------------- #
@@ -104,6 +172,14 @@ class SettingsDialog(QDialog):
         folder_layout.addWidget(self.folder_input)
         folder_layout.addWidget(browse)
         form.addRow("Dossier partagé :", folder_row)
+
+        # Recherche automatique des mises à jour (vérification silencieuse en
+        # tâche de fond au démarrage, au plus une fois par jour).
+        self.auto_update_checkbox = QCheckBox("Rechercher les mises à jour au démarrage")
+        self.auto_update_checkbox.setChecked(
+            bool(getattr(settings, "auto_check_updates", True))
+        )
+        form.addRow("Mises à jour :", self.auto_update_checkbox)
 
         # Le dossier conditionne la liste des utilisateurs connus : on la
         # rafraîchit quand il change.
@@ -163,6 +239,8 @@ class SettingsDialog(QDialog):
             last_browser_unit=initial.last_browser_unit,
             feed_units=initial.feed_units,
             feed_last_seen=initial.feed_last_seen,
+            auto_check_updates=self.auto_update_checkbox.isChecked(),
+            last_update_check=initial.last_update_check,
         )
 
     def accept(self) -> None:  # noqa: D102
@@ -1399,6 +1477,17 @@ class MainWindow(QMainWindow):
         self._feed_timer.start()
         self._update_feed_badge(getattr(self, "_feed_cases", None))
 
+        # Mise à jour automatique : état des tâches de fond + vérification
+        # différée (on laisse d'abord la fenêtre s'afficher).
+        self._update_thread = None
+        self._update_worker = None
+        self._download_thread = None
+        self._download_worker = None
+        self._progress_dialog = None
+        self._check_silent = False
+        self._pending_tag = ""
+        QTimer.singleShot(UPDATE_CHECK_DELAY_MS, self._auto_check_updates)
+
     def _build_status_bar(self) -> None:
         """Barre de statut : rouage (paramètres) + nom d'utilisateur / dossier."""
         self.settings_btn = QToolButton()
@@ -1413,6 +1502,12 @@ class MainWindow(QMainWindow):
         bar = self.statusBar()
         bar.addWidget(self.settings_btn)
         bar.addWidget(self.user_label)
+        # Version affichée en bas à droite : utile pour savoir d'un coup d'œil
+        # quelle version tourne sur un poste.
+        self.version_label = QLabel(f"v{updater.app_version()}")
+        self.version_label.setStyleSheet("color: gray;")
+        self.version_label.setToolTip("Version de RadCase Manager")
+        bar.addPermanentWidget(self.version_label)
         self._update_status()
 
     def _update_status(self) -> None:
@@ -2888,6 +2983,183 @@ class MainWindow(QMainWindow):
             self.browser.set_settings(self.settings)
             self._update_status()
 
+    # ------------------------------------------------------------------ #
+    # Mise à jour automatique
+    # ------------------------------------------------------------------ #
+    def _auto_check_updates(self) -> None:
+        """Vérification silencieuse au démarrage (au plus une fois par jour)."""
+        if updater.pending_update() is not None:
+            self._offer_pending_update()
+            return
+        if updater.should_auto_check(self.settings):
+            self.check_updates(silent=True)
+
+    def check_updates(self, silent: bool = False) -> None:
+        """Cherche une version plus récente (menu « Aide » ou vérification auto).
+
+        Les signaux du worker sont reliés à des **méthodes liées** de la fenêtre
+        (jamais des lambdas) : c'est ce qui garantit leur exécution dans le thread
+        de l'interface, seul autorisé à toucher aux widgets Qt.
+        """
+        if not updater.is_enabled():
+            if not silent:
+                QMessageBox.information(self, "Mises à jour", UPDATE_UNAVAILABLE)
+            return
+        if self._update_thread is not None:
+            return  # une vérification est déjà en cours
+
+        self._check_silent = silent
+        thread = QThread(self)
+        worker = UpdateCheckWorker()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_check_done)
+        worker.failed.connect(self._on_check_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_check_state)
+        self._update_thread = thread
+        self._update_worker = worker
+        thread.start()
+
+    def _clear_check_state(self) -> None:
+        self._update_thread = None
+        self._update_worker = None
+
+    def _on_check_done(self, tag: str) -> None:
+        updater.mark_checked(self.settings)  # anti-rebond : prochaine vérif demain
+        if not tag:
+            if not self._check_silent:
+                QMessageBox.information(
+                    self,
+                    "Mises à jour",
+                    "Vous utilisez la version la plus récente "
+                    f"({updater.app_version()}).",
+                )
+            return
+        self._prompt_update(tag)
+
+    def _on_check_failed(self, message: str) -> None:
+        if self._check_silent:
+            return  # échec réseau silencieux : on réessaiera au prochain jour
+        QMessageBox.warning(
+            self, "Mises à jour", "Impossible de vérifier les mises à jour.\n\n" + message
+        )
+
+    def _prompt_update(self, tag: str) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Mise à jour disponible",
+            f"Une nouvelle version est disponible : {tag}\n"
+            f"Version installée : {updater.app_version()}\n\n"
+            "La télécharger et l'installer maintenant ?\n"
+            "(L'application redémarrera automatiquement.)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._download_update(tag)
+
+    def _download_update(self, tag: str) -> None:
+        if self._download_thread is not None:
+            return
+        progress = QProgressDialog(f"Téléchargement de {tag}…", "Annuler", 0, 100, self)
+        progress.setWindowTitle("Mise à jour")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+
+        self._pending_tag = tag
+        self._progress_dialog = progress
+        thread = QThread(self)
+        worker = UpdateDownloadWorker(tag, updater.staged_path())
+        worker.moveToThread(thread)
+        progress.canceled.connect(self._on_download_canceled)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_download_progress)
+        worker.finished.connect(self._on_download_done)
+        worker.failed.connect(self._on_download_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_download_state)
+        self._download_thread = thread
+        self._download_worker = worker
+        thread.start()
+        progress.show()
+
+    def _clear_download_state(self) -> None:
+        self._download_thread = None
+        self._download_worker = None
+        self._progress_dialog = None
+
+    def _on_download_canceled(self) -> None:
+        """Annulation demandée : on lève le drapeau lu par le thread de travail."""
+        if self._download_worker is not None:
+            self._download_worker.cancel()
+
+    def _on_download_progress(self, done: int, total: int) -> None:
+        progress = self._progress_dialog
+        if progress is None:
+            return
+        if total > 0:
+            progress.setValue(min(100, done * 100 // total))
+        else:
+            progress.setLabelText(f"Téléchargement… {done // (1024 * 1024)} Mo")
+
+    def _on_download_done(self) -> None:
+        tag = self._pending_tag
+        if self._progress_dialog is not None:
+            self._progress_dialog.close()
+        QMessageBox.information(
+            self,
+            "Mise à jour prête",
+            f"La version {tag} a été téléchargée.\n"
+            "L'application va redémarrer pour l'installer.",
+        )
+        self._apply_update()
+
+    def _on_download_failed(self, message: str) -> None:
+        if self._progress_dialog is not None:
+            self._progress_dialog.close()
+        if "annul" in message.lower():
+            return
+        QMessageBox.warning(self, "Mise à jour", "Le téléchargement a échoué.\n\n" + message)
+
+    def _apply_update(self) -> None:
+        """Remplace l'exécutable par la version téléchargée, puis relance."""
+        try:
+            updater.apply_update()
+        except Exception as exc:  # noqa: BLE001 - remonté à l'utilisateur
+            QMessageBox.warning(
+                self,
+                "Mise à jour",
+                "La mise à jour n'a pas pu être appliquée.\n\n"
+                f"{exc}\n\nElle sera proposée au prochain démarrage.",
+            )
+            return
+        QApplication.quit()
+
+    def _offer_pending_update(self) -> None:
+        """Propose d'appliquer une mise à jour déjà téléchargée."""
+        answer = QMessageBox.question(
+            self,
+            "Mise à jour prête",
+            "Une mise à jour a déjà été téléchargée.\n\n"
+            "Redémarrer maintenant pour l'installer ?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._apply_update()
+
 
 def _app_icon() -> QIcon:
     """Icône de l'application (barre de titre + barre des tâches).
@@ -2938,6 +3210,7 @@ def _set_windows_app_id() -> None:
 
 def main() -> int:
     _set_windows_app_id()
+    updater.cleanup()  # supprime les restes de la mise à jour précédente
     app = QApplication(sys.argv)
     app.setWindowIcon(_app_icon())
 
@@ -2957,6 +3230,9 @@ def main() -> int:
     menu = window.menuBar().addMenu("Fichier")
     menu.addAction("Réglages…", window.open_settings)
     menu.addAction("Quitter", app.quit)
+    # Vérification manuelle des mises à jour.
+    help_menu = window.menuBar().addMenu("Aide")
+    help_menu.addAction("Vérifier les mises à jour…", lambda: window.check_updates())
 
     window.show()
     return app.exec()

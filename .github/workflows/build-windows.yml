@@ -37,14 +37,29 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install "pyinstaller>=6.0"
 
+      # La version de l'application est lue par l'app (menu « Aide » → vérifier
+      # les mises à jour). On l'inscrit depuis le tag : elle sert à comparer avec
+      # la dernière release publiée. Hors tag, ``version.py`` garde sa valeur de
+      # développement (``…dev``), ce qui désactive la recherche de mises à jour.
+      - name: Injecter la version depuis le tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python -c "import os; open('version.py','w',encoding='utf-8').write('APP_VERSION = %r\n' % os.environ['GITHUB_REF_NAME'])"
+
       - name: Construire l'exécutable
         run: python -m PyInstaller --clean --noconfirm RadCaseManager.spec
+
+      # Empreinte du binaire, attachée à la release : permet de vérifier
+      # l'intégrité du téléchargement (contrôle manuel ou outillage futur).
+      - name: Calculer l'empreinte SHA-256
+        run: python -c "import hashlib,pathlib; p=pathlib.Path('dist/RadCaseManager.exe'); print(hashlib.sha256(p.read_bytes()).hexdigest()+'  RadCaseManager.exe')" > dist/RadCaseManager.exe.sha256
 
       - name: Publier l'artefact
         uses: actions/upload-artifact@v4
         with:
           name: RadCaseManager-windows
-          path: dist/RadCaseManager.exe
+          path: |
+            dist/RadCaseManager.exe
+            dist/RadCaseManager.exe.sha256
           if-no-files-found: error
 
       - name: Créer la release GitHub (tags uniquement)
@@ -54,5 +69,6 @@ jobs:
         run: >
           gh release create "${{ github.ref_name }}"
           dist/RadCaseManager.exe
+          dist/RadCaseManager.exe.sha256
           --title "RadCase Manager ${{ github.ref_name }}"
           --generate-notes
