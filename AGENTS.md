@@ -89,10 +89,21 @@ presse-papiers, dans un **dossier réseau partagé**.
 - Tester le backend sans GUI : voir `README.md`.
 
 ## Publication GitHub
-- Dépôt distant : **`gfahrni/radcase-manager`** (branche `main`), public. La
-  connexion passe par la CLI **`gh`** (compte `gfahrni`) : `gh auth setup-git`
-  installe l'aide-mémoire d'identifiants, ensuite `git clone` / `git push`
-  s'authentifient seuls.
+- Dépôt distant : **`gfahrni/radcase-manager`** (branche `main`), public.
+- **Deux moyens de s'authentifier, par ordre de préférence :**
+  1. **`gh`** (compte `gfahrni`) : `gh auth setup-git` installe l'aide-mémoire
+     d'identifiants, ensuite `git clone` / `git push` s'authentifient seuls.
+     Vérifier au préalable `gh auth status` : le jeton expire, et git échoue
+     alors sur `could not read Username for 'https://github.com'` (la config
+     locale fait passer HTTPS par `!gh auth git-credential`).
+  2. **SSH** (aucun jeton, aucun secret à manipuler) : la machine a une clé
+     `~/.ssh/id_ed25519` enregistrée sur le compte GitHub. Vérifier avec
+     `ssh -T git@github.com` → doit répondre *« Hi gfahrni! »*, puis passer le
+     dépôt en URL SSH :
+     `git remote set-url origin git@github.com:gfahrni/radcase-manager.git`.
+     C'est la solution de repli quand le jeton `gh` est invalide.
+  La **création de la release** ne demande pas d'authentification locale : le
+  workflow utilise son propre `GITHUB_TOKEN` (voir `.github/workflows/`).
 - **Pas de `.git` local** dans le dossier du projet : on pousse la version
   actuelle depuis un **clone temporaire** du dépôt (synchroniser la racine
   dedans, puis commit + push sur `main`).
