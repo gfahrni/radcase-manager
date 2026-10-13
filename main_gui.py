@@ -1728,6 +1728,10 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(top, 1)
 
         # --- Zone basse : ancrages temporels ---
+        # Volontairement SANS facteur d'étirement : la temporalité prend sa hauteur
+        # naturelle et tout l'espace restant revient à la liste des unités (déployée
+        # au maximum). Elle n'est comprimée — avec ascenseur — que si la fenêtre est
+        # trop courte.
         bottom = QWidget()
         bottom.setAttribute(Qt.WA_StyledBackground, True)
         bottom.setStyleSheet("border-top: 1px solid #444;")
@@ -1762,7 +1766,7 @@ class MainWindow(QMainWindow):
         anchors_scroll.setWidget(anchors_container)
         bottom_layout.addWidget(anchors_scroll)
 
-        left_layout.addWidget(bottom, 1)
+        left_layout.addWidget(bottom)
 
         # --- Zone basse : filtre « Type de cas » (3 cases à cocher) ---
         feed_types_box = QWidget()

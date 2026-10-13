@@ -307,6 +307,11 @@ renommage dans un dossier jetable, nettoyage, et flux GUI complet avec retour de
 handlers dans le thread principal. Reste à valider sur un poste **Windows** : la
 bascule effective du `.exe` en cours d'exécution.
 
+**Première release équipée : `v4.0`** (13/10/2026). Le binaire publié embarque bien
+`APP_VERSION = "v4.0"` — vérifié en décompressant le module `version` du `.exe`
+téléchargé, empreinte SHA-256 concordante avec l'asset publié. Le test de bout en
+bout se fera donc de **`v4.0` vers `v4.1`**.
+
 Pistes non retenues pour l'instant : vérification de l'empreinte SHA-256 côté
 client, retour arrière automatique si la nouvelle version ne démarre pas, canal
 « bêta », signature de code.
