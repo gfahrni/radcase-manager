@@ -7,7 +7,9 @@ presse-papiers, dans un **dossier réseau partagé**.
 
 ## Architecture (V3)
 - Source de vérité = le dossier partagé, **un dossier par cas** :
-  `cases/<AAAA-MM>/<id>/case.md` + `image.png`.
+  `cases/<AAAA-MM>/<id>/case.md` + `image.jpg` (JPEG ré-encodé à
+  l'enregistrement, qualité `storage.IMAGE_QUALITY` ; les cas historiques
+  peuvent contenir un `image.png`).
 - `case.md` = frontmatter **YAML** (id, title, date_added, date_modified, case_type,
   visibility, author, units, image) suivi de la description en markdown.
   `visibility` = `public` (défaut) ou `private` (masqué de la recherche des autres).
@@ -28,7 +30,9 @@ presse-papiers, dans un **dossier réseau partagé**.
 
 ## Conventions
 - GUI en **PySide6** ; frontmatter en **PyYAML** ; capture image via **QClipboard**
-  (Pillow n'est plus utilisé pour la capture) ; suppression via **send2trash**.
+  (Pillow n'est plus utilisé) ; encodage JPEG à l'enregistrement via Qt
+  (`QImageWriter`, qualité `storage.IMAGE_QUALITY` = 98 + progressif) ;
+  suppression via **send2trash**.
 - L'onglet « Consulter » n'affiche **rien par défaut** (recherche à la demande),
   pour ne pas saturer avec des milliers de cas.
 - Textes de l'UI et commentaires en **français**.

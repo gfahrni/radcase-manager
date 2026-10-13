@@ -48,7 +48,8 @@ Ce dossier contient les cas cliniques enregistrés avec RadCase Manager.
 ## Structure
 
 - `cases/AAAA-MM/<id>/case.md` : les métadonnées et la description d'un cas.
-- `cases/AAAA-MM/<id>/image.png` : l'image du cas (le cas échéant).
+- `cases/AAAA-MM/<id>/image.jpg` : l'image du cas (le cas échéant), compressée
+  en JPEG (les cas plus anciens peuvent contenir un `image.png`).
 - `units.json` : le vocabulaire contrôlé des unités (modifiable par tous).
 
 ## Règles

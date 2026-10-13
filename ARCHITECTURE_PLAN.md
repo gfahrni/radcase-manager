@@ -30,7 +30,7 @@ Un **dossier par cas**, contenant ses métadonnées `.md` et son image :
 │   └── 2026-10/                        # sharding par mois
 │       └── 20261008_174301_5709/       # id = YYYYMMDD_HHMMSS_xxxx
 │           ├── case.md                 # frontmatter YAML + description
-│           └── image.png
+│           └── image.jpg               # JPEG (compressé, qualité IMAGE_QUALITY)
 ├── units.json                          # vocabulaire contrôlé des unités
 └── README.md
 ```
@@ -61,7 +61,7 @@ case_type: Standard
 visibility: public
 author: Dr Martin
 units: [Thorax]
-image: image.png
+image: image.jpg
 ---
 
 Description narrative, observations clés...
@@ -80,10 +80,10 @@ Description narrative, observations clés...
 ## 🔒 Écriture atomique
 
 ```
-1. Image     ← presse-papiers (QClipboard)
+1. Image     ← presse-papiers (QClipboard), ré-encodée en JPEG
 2. id        ← horodatage + uuid
 3. mkdir     cases/<YYYY-MM>/.tmp_<id>/
-4. Écrire    image.png + case.md (UTF-8)
+4. Écrire    image.jpg + case.md (UTF-8)
 5. os.rename .tmp_<id>/  →  <id>/        ← atomique sur le même partage
 6. En cas d'échec → suppression du dossier temporaire
 ```
@@ -101,6 +101,51 @@ Un cas est éditable (onglet « Édition » dédié, ouvert par clic droit → �
 - Dernier écrivain gagne (pas de verrou) : l'édition est rare et non simultanée.
 - En mode édition, l'**import automatique du presse-papiers est désactivé** pour
   ne pas écraser l'image en cours.
+
+## 🖼️ Compression des images
+
+L'image du presse-papiers est ré-encodée en **JPEG progressif** à
+l'enregistrement (`storage.IMAGE_QUALITY` = 98, `storage.IMAGE_PROGRESSIVE`),
+avec :
+
+- **Qt seul** (`QImageWriter`, greffon `qjpeg` déjà collecté avec les autres
+  greffons Qt du `.exe`) : aucune dépendance ajoutée ;
+- **mode progressif** : mêmes pixels à qualité égale, ~20 % de poids en moins ;
+- **alpha aplati sur fond blanc** avant encodage (JPEG n'a pas de canal alpha ;
+  sans ça les zones transparentes virent au noir) ;
+- **rétro-compatibilité totale** : les cas antérieurs gardent leur `image.png`
+  (le nom réel est relu dans le frontmatter `image:`), et une édition sans
+  nouvelle image (`KEEP_IMAGE`) conserve l'octet pour octet.
+
+Mesures sur une capture type (1024×768, speckle + texte PACS), bitmap brut du
+presse-papiers = 3 072 Ko :
+
+| Encodage | Poids | PSNR zone texte |
+|---|---|---|
+| PNG (sans perte) | 648 Ko | ∞ |
+| JPEG q92 | 209 Ko | 42,6 dB |
+| **JPEG q98 progressif (retenu)** | **325 Ko** | **51,2 dB** |
+| WebP sans perte | 376 Ko | ∞ |
+
+Le choix de **q98** (plutôt que 92) vient de la lisibilité du **texte fin** :
+cotes, flèches et annotations PACS sont ce qui souffre le plus en JPEG, et
+l'écart est net (51 dB contre 42 dB). Le poids reste ~2 fois meilleur que le PNG,
+et « seulement » ~1,5 fois celui du q92.
+
+Deux points vérifiés à la mesure, qui évitent d'ajouter une dépendance pour rien :
+
+- Qt encode **déjà en 4:4:4** (chroma pleine résolution, lu sur les marqueurs
+  SOF) : les annotations colorées ne souffrent pas de sous-échantillonnage, donc
+  `subsampling=0` de Pillow n'apporterait rien ;
+- `setOptimizedWrite` n'apporte rien en mode progressif (Huffman déjà optimisé).
+
+**Alternatives écartées** : WebP sans perte (zéro dégradation, mais fichiers
+`.webp` moins universels hors de l'app et ~15 % plus lourds que q98) ; Pillow
+(aucun gain restant sur Qt) ; PNG (zéro perte mais 2× plus lourd que q98).
+
+⚠️ JPEG est **destructif** : adapté à un catalogue visuel, à éviter comme source
+de mesure ou d'archivage de référence. Le gain dépend du contenu (typiquement 2 à
+5 fois le PNG ; le speckle limite le gain).
 
 ## 🔎 Recherche
 
@@ -132,8 +177,7 @@ critère n'est pas saisi (évite de déverser des milliers de lignes).
 
 ## 🛠️ Dépendances
 
-- `PySide6` (GUI + presse-papiers)
-- `Pillow` (DÉPRÉCIÉ pour la capture, conservé pour le traitement d'image optionnel)
+- `PySide6` (GUI + presse-papiers + encodage JPEG des images)
 - `PyYAML` (frontmatter)
 - `sqlite3` (stdlib, utilisé pour l'index local `settings_data/index.db`)
 

@@ -11,7 +11,12 @@ partagé**.
 ## Principe
 
 - **Un cas = un dossier** dans le dossier partagé :
-  `cases/<AAAA-MM>/<id>/case.md` + `image.png`.
+  `cases/<AAAA-MM>/<id>/case.md` + `image.jpg`.
+- **Images compressées** : l'image collée est ré-encodée en **JPEG** (qualité
+  `storage.IMAGE_QUALITY`, 98 par défaut) à l'enregistrement — typiquement 2 à
+  5 fois plus léger qu'un PNG, sans perte visible. Aucune dépendance ajoutée :
+  l'encodage est assuré par Qt. Les cas antérieurs (`image.png`) restent
+  parfaitement lisibles (le nom du fichier est relu dans le `case.md`).
 - **Cas figés** (append-only) : on n'écrit jamais deux fois le même cas, ce qui
   évite tout conflit de verrou sur le partage réseau.
 - **Écriture atomique** : dossier temporaire `.tmp_<id>` puis renommage.

@@ -3,7 +3,13 @@
 Source de vérité : un dossier par cas dans le dossier partagé ::
 
     cases/<AAAA-MM>/<id>/case.md
-    cases/<AAAA-MM>/<id>/image.png
+    cases/<AAAA-MM>/<id>/image.jpg
+
+L'image collée est ré-encodée en **JPEG progressif** (:data:`IMAGE_QUALITY`) :
+le poids baisse de plusieurs fois, sans différence visible (encodage assuré par
+Qt, donc aucune dépendance ajoutée).
+Les cas historiques peuvent contenir ``image.png`` : le nom réel du fichier est
+toujours relu dans le frontmatter (``image:``), jamais deviné.
 
 Un cas est écrit dans un dossier temporaire ``.tmp_<id>`` puis renommé vers son
 nom final. Le renommage étant atomique sur un même volume, un cas n'existe que
@@ -28,8 +34,22 @@ import config
 
 CASES_DIRNAME = "cases"
 CASE_FILENAME = "case.md"
-IMAGE_FILENAME = "image.png"
+#: Nom du fichier image des nouveaux cas (JPEG, cf. :data:`IMAGE_QUALITY`).
+IMAGE_FILENAME = "image.jpg"
+#: Nom historique (PNG) : encore présent dans les cas antérieurs à la
+#: compression JPEG, et utilisé pour les données ``bytes`` déjà encodées.
+LEGACY_IMAGE_FILENAME = "image.png"
 TMP_PREFIX = ".tmp_"
+
+#: Qualité JPEG (0-100) appliquée à l'enregistrement des images.
+#: 98 = texte, cotes et flèches nets (indispensables pour lire une mesure sur
+#: un screenshot) tout en restant ~2 fois plus léger qu'un PNG. Descendre à 92
+#: pour privilégier le poids au détriment de la lisibilité des petits textes,
+#: monter à 100 (quasi sans perte, ~1,3 fois plus lourd) si nécessaire.
+IMAGE_QUALITY = 98
+#: Encodage **progressif** : mêmes pixels à qualité égale, ~20 % de poids en
+#: moins (mesuré ; la lecture est universellement prise en charge aujourd'hui).
+IMAGE_PROGRESSIVE = True
 
 # Sentinelle : « conserver l'image existante » lors d'une édition.
 KEEP_IMAGE = object()
@@ -154,15 +174,95 @@ def _parse_case_md(path: Path) -> Optional[Case]:
     )
 
 
-def _save_image(image: Any, path: Path) -> None:
-    """Écrit une image fournie sous forme de bytes, PIL.Image ou QImage."""
+#: En-tête permettant de reconnaître des données ``bytes`` déjà encodées en JPEG.
+_JPEG_MAGIC = b"\xff\xd8"
+
+
+def _is_qt_image(image: Any) -> bool:
+    """Vrai pour un ``QImage`` (détection par capacités, sans importer Qt)."""
+    return hasattr(image, "hasAlphaChannel") and hasattr(image, "save")
+
+
+def _is_pillow_image(image: Any) -> bool:
+    """Vrai pour une image Pillow (détection par capacités, sans importer PIL)."""
+    return hasattr(image, "mode") and hasattr(image, "save")
+
+
+def _jpeg_with_qt(image: Any, path: Path, quality: int) -> None:
+    """Encode ``image`` (``QImage``) en JPEG progressif à ``quality``.
+
+    ``QImageWriter`` est utilisé plutôt que ``QImage.save()`` pour activer le
+    mode **progressif** (mêmes pixels, ~20 % de poids en moins, vérifié). Qt
+    encode déjà en 4:4:4 (chroma pleine résolution, lu sur les marqueurs SOF) :
+    les annotations colorées ne sont donc pas dégradées.
+
+    JPEG ne gère pas la transparence : une image avec canal alpha est d'abord
+    composée sur fond **blanc** (sinon les zones transparentes virent au noir).
+    """
+    from PySide6.QtGui import QImageWriter
+
+    if image.hasAlphaChannel():
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QImage, QPainter
+
+        canvas = QImage(image.size(), QImage.Format_RGB32)
+        canvas.fill(Qt.white)
+        painter = QPainter(canvas)
+        painter.drawImage(0, 0, image)
+        painter.end()
+        image = canvas
+
+    writer = QImageWriter(str(path), b"JPEG")
+    writer.setQuality(quality)
+    writer.setProgressiveScanWrite(IMAGE_PROGRESSIVE)
+    if not writer.write(image):
+        raise RuntimeError(
+            "Échec de l'encodage JPEG de l'image "
+            f"(greffon Qt « jpeg » indisponible ? {writer.errorString()})"
+        )
+
+
+def _jpeg_with_pillow(image: Any, path: Path, quality: int) -> None:
+    """Encode une image Pillow en JPEG (4:4:4, progressif, Huffman optimisé)."""
+    if image.mode not in ("RGB", "L", "CMYK"):
+        image = image.convert("RGB")
+    image.save(
+        str(path),
+        format="JPEG",
+        quality=quality,
+        subsampling=0,   # 4:4:4 : préserve la chroma (Doppler, cartographies)
+        optimize=True,   # tables de Huffman optimisées (~5-10 % de gain)
+        progressive=True,
+    )
+
+
+def _save_image(image: Any, directory: Path, quality: int = IMAGE_QUALITY) -> str:
+    """Écrit l'image dans ``directory`` et retourne le **nom** du fichier créé.
+
+    - ``QImage`` ou image Pillow : ré-encodée en JPEG (qualité ``quality``) →
+      ``image.jpg`` ;
+    - ``bytes`` : données déjà encodées, écrites telles quelles ; l'extension
+      est déduite de l'en-tête (``image.jpg`` pour du JPEG, ``image.png``
+      sinon).
+
+    Qt/Pillow ne sont importés qu'au moment de l'encodage : le module reste
+    utilisable en ligne de commande, sans environnement graphique.
+    """
     if isinstance(image, (bytes, bytearray)):
-        path.write_bytes(bytes(image))
-        return
-    save = getattr(image, "save", None)
-    if save is None:
-        raise TypeError("Format d'image non supporté (attendu : bytes, PIL.Image ou QImage).")
-    save(str(path))
+        data = bytes(image)
+        name = IMAGE_FILENAME if data[:2] == _JPEG_MAGIC else LEGACY_IMAGE_FILENAME
+        (directory / name).write_bytes(data)
+        return name
+
+    if _is_qt_image(image):
+        _jpeg_with_qt(image, directory / IMAGE_FILENAME, quality)
+        return IMAGE_FILENAME
+
+    if _is_pillow_image(image):
+        _jpeg_with_pillow(image, directory / IMAGE_FILENAME, quality)
+        return IMAGE_FILENAME
+
+    raise TypeError("Format d'image non supporté (attendu : bytes, QImage ou PIL.Image).")
 
 
 # --- Écriture ---------------------------------------------------------------
@@ -183,6 +283,9 @@ def create_case(
     """Crée un cas de façon atomique et retourne l'objet :class:`Case`.
 
     ``image`` peut être ``None``, des ``bytes``, un ``PIL.Image`` ou un ``QImage``.
+    Les images Qt/Pillow sont ré-encodées en JPEG progressif
+    (:data:`IMAGE_QUALITY`) pour diviser fortement le poids du cas tout en
+    gardant les textes et cotes lisibles.
     ``visibility`` vaut ``"public"`` (défaut) ou ``"private"`` : un cas privé
     n'apparaît dans la recherche que pour son auteur.
     Lève ``ValueError`` si le titre est vide ou le dossier partagé manquant.
@@ -212,8 +315,7 @@ def create_case(
     try:
         image_name: Optional[str] = None
         if image is not None:
-            image_name = IMAGE_FILENAME
-            _save_image(image, tmp_dir / image_name)
+            image_name = _save_image(image, tmp_dir)
 
         meta = {
             "id": case_id,
@@ -268,8 +370,10 @@ def update_case(
 
     - ``id`` et ``date_added`` sont **conservés** ; ``date_modified`` est ajouté.
     - L'ancien dossier est envoyé dans la **corbeille** avant réécriture.
-    - ``image`` : ``KEEP_IMAGE`` (défaut) réutilise l'image existante, ``None``
-      la retire, toute autre valeur (bytes/PIL/QImage) la remplace.
+    - ``image`` : ``KEEP_IMAGE`` (défaut) réutilise l'image existante **telle
+      quelle** (nom et encodage conservés, y compris un ancien ``image.png``),
+      ``None`` la retire, toute autre valeur (bytes/PIL/QImage) la remplace par
+      une version JPEG ré-encodée.
     - ``visibility`` : ``None`` (défaut) conserve la visibilité du cas.
     - Écriture atomique par fichier (dossier temporaire puis renommage).
     """
@@ -294,8 +398,7 @@ def update_case(
                 shutil.copy2(final_dir / case.image, tmp_dir / case.image)
                 image_name = case.image
         elif image is not None:
-            image_name = IMAGE_FILENAME
-            _save_image(image, tmp_dir / image_name)
+            image_name = _save_image(image, tmp_dir)
 
         # 2) case.md : on conserve id + date_added, on ajoute date_modified.
         modified = datetime.now().isoformat(timespec="seconds")
