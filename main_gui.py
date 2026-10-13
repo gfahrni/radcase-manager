@@ -135,6 +135,16 @@ class UpdateDownloadWorker(QObject):
         self.finished.emit()
 
 
+class ClickableLabel(QLabel):
+    """Étiquette cliquable — utilisée par l'indicateur de mise à jour."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 # --------------------------------------------------------------------------- #
 # Réglages (/première exécution)
 # --------------------------------------------------------------------------- #
@@ -245,6 +255,9 @@ class SettingsDialog(QDialog):
             feed_last_seen=initial.feed_last_seen,
             auto_check_updates=self.auto_update_checkbox.isChecked(),
             last_update_check=initial.last_update_check,
+            available_update=initial.available_update,
+            update_snooze_until=initial.update_snooze_until,
+            update_snooze_version=initial.update_snooze_version,
         )
 
     def accept(self) -> None:  # noqa: D102
@@ -1514,10 +1527,20 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.user_label)
         # Version affichée en bas à droite : utile pour savoir d'un coup d'œil
         # quelle version tourne sur un poste.
-        self.version_label = QLabel(f"v{updater.app_version()}")
+        self.version_label = QLabel(updater.display_version())
         self.version_label.setStyleSheet("color: gray;")
         self.version_label.setToolTip("Version de RadCase Manager")
         bar.addPermanentWidget(self.version_label)
+        # Indicateur persistant quand une version plus récente est connue : il
+        # reste visible même après un « Plus tard », et un clic relance la
+        # proposition.
+        self.update_label = ClickableLabel()
+        self.update_label.setCursor(Qt.PointingHandCursor)
+        self.update_label.setStyleSheet("color:#e6a23c; font-weight:bold;")
+        self.update_label.clicked.connect(lambda: self.check_updates())
+        self.update_label.hide()
+        bar.addPermanentWidget(self.update_label)
+        self._refresh_update_indicator()
         self._update_status()
 
     def _update_status(self) -> None:
@@ -3056,17 +3079,33 @@ class MainWindow(QMainWindow):
         self._update_worker = None
 
     def _on_check_done(self, tag: str) -> None:
-        updater.mark_checked(self.settings)  # anti-rebond : prochaine vérif demain
+        updater.mark_checked(self.settings)         # anti-rebond : prochaine vérif demain
+        updater.note_available(self.settings, tag)  # indicateur persistant
+        config.save_settings(self.settings)
+        self._refresh_update_indicator()
         if not tag:
             if not self._check_silent:
                 QMessageBox.information(
                     self,
                     "Mises à jour",
                     "Vous utilisez la version la plus récente "
-                    f"({updater.app_version()}).",
+                    f"({updater.display_version()}).",
                 )
             return
-        self._prompt_update(tag)
+        # Une vérification demandée à la main propose toujours la mise à jour ;
+        # la proposition automatique respecte le report du bouton « Plus tard ».
+        if not self._check_silent or updater.should_prompt(self.settings, tag):
+            self._prompt_update(tag)
+
+    def _refresh_update_indicator(self) -> None:
+        """Affiche (ou masque) « mise à jour disponible » dans la barre de statut."""
+        tag = updater.available_update(self.settings)
+        self.update_label.setVisible(bool(tag))
+        if tag:
+            self.update_label.setText(f"⬆  Mise à jour disponible ({tag})")
+            self.update_label.setToolTip(
+                f"La version {tag} est disponible — cliquez pour l'installer."
+            )
 
     def _on_check_failed(self, message: str) -> None:
         if self._check_silent:
@@ -3080,14 +3119,19 @@ class MainWindow(QMainWindow):
             self,
             "Mise à jour disponible",
             f"Une nouvelle version est disponible : {tag}\n"
-            f"Version installée : {updater.app_version()}\n\n"
+            f"Version installée : {updater.display_version()}\n\n"
             "La télécharger et l'installer maintenant ?\n"
             "(L'application redémarrera automatiquement.)",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,
         )
-        if answer == QMessageBox.Yes:
-            self._download_update(tag)
+        if answer != QMessageBox.Yes:
+            # « Plus tard » : on ne reproposera pas avant un mois. L'indicateur en
+            # bas à droite reste visible pour que l'utilisateur puisse agir avant.
+            updater.snooze(self.settings, tag)
+            config.save_settings(self.settings)
+            return
+        self._download_update(tag)
 
     def _download_update(self, tag: str) -> None:
         if self._download_thread is not None:
@@ -3171,6 +3215,8 @@ class MainWindow(QMainWindow):
                 f"{exc}\n\nElle sera proposée au prochain démarrage.",
             )
             return
+        updater.note_available(self.settings, "")  # la version installée va changer
+        config.save_settings(self.settings)
         QApplication.quit()
 
     def _offer_pending_update(self) -> None:

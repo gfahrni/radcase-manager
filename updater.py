@@ -65,6 +65,9 @@ TIMEOUT = 20
 #: Intervalle minimal entre deux vérifications automatiques (heures).
 CHECK_INTERVAL_HOURS = 24
 
+#: Report d'une proposition de mise à jour refusée (« Plus tard »), en jours.
+SNOOZE_DAYS = 30
+
 #: Taille plancher d'un exécutable plausible : garde-fou contre un téléchargement
 #: tronqué ou une page d'erreur enregistrée par erreur (l'exécutable fait ~50 Mo).
 MIN_EXE_SIZE = 5 * 1024 * 1024
@@ -80,6 +83,16 @@ class UpdateError(RuntimeError):
 def app_version() -> str:
     """Version de l'application en cours d'exécution (ex. ``v3.13``)."""
     return str(getattr(config, "APP_VERSION", "0.0.0.dev"))
+
+
+def display_version() -> str:
+    """Version prête à afficher, avec **un seul** ``v`` initial (ex. ``v4.3``).
+
+    La CI inscrit le tag tel quel (``v4.3``), mais une version de développement
+    n'a pas de préfixe : on normalise ici pour ne pas afficher « vv4.3 ».
+    """
+    value = app_version().strip()
+    return value if value[:1] in ("v", "V") else f"v{value}"
 
 
 def is_dev_build() -> bool:
@@ -450,6 +463,61 @@ def mark_checked(settings) -> None:
     """Horodate la vérification dans les réglages locaux (objet passé)."""
     settings.last_update_check = datetime.now(timezone.utc).isoformat(timespec="seconds")
     config.save_settings(settings)
+
+
+# --------------------------------------------------------------------------- #
+# Version disponible : mémorisation, indicateur, report
+# --------------------------------------------------------------------------- #
+def available_update(settings) -> str:
+    """Version mémorisée comme disponible, si elle est **encore** plus récente.
+
+    Une version devenue obsolète (l'application a été mise à jour entre-temps)
+    renvoie ``""``, ce qui masque l'indicateur.
+    """
+    tag = (getattr(settings, "available_update", "") or "").strip()
+    return tag if tag and is_newer(tag, app_version()) else ""
+
+
+def note_available(settings, tag: str) -> None:
+    """Mémorise la version disponible (``""`` = plus rien de nouveau).
+
+    Effacer la version efface aussi le report : il n'a plus d'objet.
+    """
+    settings.available_update = tag or ""
+    if not settings.available_update:
+        settings.update_snooze_until = ""
+        settings.update_snooze_version = ""
+
+
+def should_prompt(settings, tag: str) -> bool:
+    """Faut-il proposer la mise à jour ``tag`` maintenant ?
+
+    Un « Plus tard » reporte la proposition de ``SNOOZE_DAYS`` jours, **sauf** si
+    une version encore plus récente apparaît entre-temps (l'information est
+    nouvelle, on la remonte tout de suite).
+    """
+    until = (getattr(settings, "update_snooze_until", "") or "").strip()
+    if not until:
+        return True
+    snoozed = (getattr(settings, "update_snooze_version", "") or "").strip()
+    if snoozed and is_newer(tag, snoozed):
+        return True
+    try:
+        moment = datetime.fromisoformat(until)
+    except ValueError:
+        return True
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= moment
+
+
+def snooze(settings, tag: str) -> None:
+    """Reporte la proposition de ``SNOOZE_DAYS`` jours (bouton « Plus tard »)."""
+    now = datetime.now(timezone.utc)
+    settings.update_snooze_until = (
+        now + timedelta(days=SNOOZE_DAYS)
+    ).isoformat(timespec="seconds")
+    settings.update_snooze_version = tag or ""
 
 
 # --------------------------------------------------------------------------- #

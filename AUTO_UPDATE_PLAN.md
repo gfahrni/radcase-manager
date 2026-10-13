@@ -352,6 +352,20 @@ après le démarrage. La reconnaissance des fichiers est élargie (`.old`/`.new`
 compris renommés par le navigateur) ; l'exécutable courant et la sauvegarde
 officielle ne sont jamais touchés.
 
+**`v4.4` — rappel à un mois et indicateur persistant.** Trois ajustements d'usage :
+
+1. le bouton « Plus tard » **reporte la proposition d'un mois** (`SNOOZE_DAYS`) au
+   lieu de laisser l'anti-rebond de 24 h effacer toute trace ;
+2. un **indicateur persistant** « ⬆ Mise à jour disponible (vX) » s'affiche en bas à
+   droite tant que la version n'est pas installée — un clic relance la proposition,
+   et une vérification manuelle la propose toujours quel que soit le report ;
+3. la version affichée est **normalisée** : la CI inscrivant le tag complet
+   (`v4.3`), l'étiquette affichait « vv4.3 ».
+
+Une version **strictement plus récente** que celle reportée l'emporte sur le
+report : si l'utilisateur a dit « Plus tard » à la v4.4 puis qu'une v4.5 paraît,
+elle est proposée sans attendre le mois.
+
 Pistes non retenues pour l'instant : vérification de l'empreinte SHA-256 côté
 client, retour arrière automatique si la nouvelle version ne démarre pas, canal
 « bêta », signature de code.

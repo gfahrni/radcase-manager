@@ -121,6 +121,10 @@ L'application installée se met à jour **d'elle-même** depuis les releases Git
 - Si un fichier de mise à jour traîne à côté de l'exécutable (reste des versions
   antérieures à la v4.2), il est **mis à la corbeille** au démarrage, avec des
   réessais différés : un antivirus peut tenir le fichier quelques instants.
+- Si l'utilisateur répond « Plus tard », la proposition est **reportée d'un mois** ;
+  un indicateur **« ⬆ Mise à jour disponible (vX) »** reste alors affiché en bas à
+  droite — un clic relance la proposition. Une version encore plus récente l'emporte
+  sur le report.
 
 La version embarquée est **inscrite par la CI** dans `version.py` au moment du
 build, à partir du tag. Un binaire de développement (version contenant `dev`, ou

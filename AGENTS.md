@@ -41,6 +41,9 @@ presse-papiers, dans un **dossier réseau partagé**.
   **jamais** dans le dossier de l'exécutable, pour qu'une seule icône soit visible.
   Les restes visibles à côté de l'exécutable partent à la **corbeille**
   (`send2trash`), avec réessais différés après le démarrage.
+  Réglages associés : `auto_check_updates`, `last_update_check` (anti-rebond 24 h),
+  `available_update` + `update_snooze_until` / `update_snooze_version` (rapport
+  d'un mois après « Plus tard », indicateur persistant en barre de statut).
   Aucune dépendance externe (hors `send2trash`, déjà requis).
 - `version.py` : version de l'application, **inscrite par la CI** au build à partir
   du tag ; un binaire de développement (``…dev``) désactive la mise à jour.

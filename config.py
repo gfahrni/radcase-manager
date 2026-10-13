@@ -115,6 +115,12 @@ DEFAULT_SETTINGS = {
     "auto_check_updates": True,
     #: Horodatage ISO de la dernière vérification de mise à jour réussie.
     "last_update_check": "",
+    #: Tag d'une version plus récente connue (indicateur « mise à jour disponible »).
+    "available_update": "",
+    #: Date ISO avant laquelle ne plus *proposer* la mise à jour (bouton « Plus tard »).
+    "update_snooze_until": "",
+    #: Version effectivement reportée par l'utilisateur.
+    "update_snooze_version": "",
 }
 
 
@@ -135,6 +141,12 @@ class Settings:
     auto_check_updates: bool = True
     #: Horodatage ISO de la dernière vérification réussie (anti-rebond 24 h).
     last_update_check: str = ""
+    #: Version plus récente connue (indicateur persistant « mise à jour disponible »).
+    available_update: str = ""
+    #: Date ISO avant laquelle ne plus proposer la mise à jour (« Plus tard »).
+    update_snooze_until: str = ""
+    #: Version reportée par l'utilisateur (« Plus tard »).
+    update_snooze_version: str = ""
 
     @property
     def is_configured(self) -> bool:
@@ -158,8 +170,10 @@ def load_settings() -> Settings:
         settings.feed_last_seen = ""
     if not isinstance(settings.auto_check_updates, bool):
         settings.auto_check_updates = True
-    if not isinstance(settings.last_update_check, str):
-        settings.last_update_check = ""
+    for name in ("last_update_check", "available_update", "update_snooze_until",
+                 "update_snooze_version"):
+        if not isinstance(getattr(settings, name), str):
+            setattr(settings, name, "")
     # Nom d'auteur : à défaut de valeur enregistrée, on prend celui de la session.
     if not settings.user_name.strip():
         settings.user_name = session_user_name()
