@@ -206,13 +206,49 @@ fenêtre affichée.
 | `bootstrap.py` | crée `cases/`, `units.json`, `users.json`, `README.md` si absents |
 | `storage.py` | `create_case()`, `list_cases()`, `search_cases()` + index local |
 | `thumbnails.py` | cache local des vignettes d'affichage (dérivées, reconstructible) |
+| `tray.py` | zone de notification (icône + menu) et verrou mono-instance |
 | `updater.py` | mise à jour automatique depuis les releases GitHub (stdlib seule) |
 | `version.py` | version de l'application, inscrite par la CI au build |
 | `main_gui.py` | interface PySide6 (saisie + consultation) |
 
+## 🪟 Mode « barre d'état système » (zone de notification)
+
+Fermer la fenêtre **n'arrête plus** l'application : elle se **réduit dans la zone
+de notification** (le carré à côté de l'horloge) et reste accessible par son
+icône — Ouvrir / Réglages… / Quitter. C'est le comportement attendu d'une
+application portable, et l'application n'a plus à être relancée entre deux cas.
+
+Points d'implémentation :
+
+- **Le réglage `close_to_tray`** (défaut `True`) décide du comportement de la
+  croix ; décoché, la fermeture arrête l'application. L'arrêt réel reste toujours
+  possible par **Fichier → Quitter** ou par l'icône → **Quitter**.
+- **Verrou mono-instance** (`tray.SingleInstance`) : un seul processus par session
+  utilisateur. Sans lui, un double-clic sur l'exécutable alors que l'application
+  est réduite lancerait un second processus — deux icônes, deux index locaux,
+  deux écritures concurrentes sur le partage. Le mécanisme est un **canal local
+  nommé** (`QLocalServer`/`QLocalSocket`, nom portant le compte de session) : le
+  second lancement **réveille** la fenêtre existante, puis se termine. Il attend un
+  **accusé de réception**, ce qui distingue une instance vivante d'un canal
+  orphelin laissé par un plantage. Ce n'est *pas* un fichier de verrou
+  (`QLockFile`), lequel peut rester orphelin et bloquer les démarrages suivants.
+
+  > ⚠️ Ne pas ajouter `QLocalServer.setSocketOptions()` : sur Unix (Qt 6.12), poser
+  > une option d'accès fait répondre « succès » au second `listen()` sur le même
+  > nom — les deux instances se croient alors seules. Le cloisonnement par
+  > utilisateur vient du **nom** du canal.
+
+- **Interaction avec la mise à jour automatique** : au redémarrage, la nouvelle
+  version démarre pendant que l'ancienne achève de s'arrêter. L'ancienne instance
+  **libère donc le canal avant d'appliquer la mise à jour**
+  (`MainWindow._apply_update`) : sans cela, la nouvelle version se croirait
+  « seconde instance » et sortirait aussitôt — régression silencieuse de la mise à
+  jour. Le verrou est repris si la mise à jour échoue.
+
 ## 🛠️ Dépendances
 
-- `PySide6` (GUI + presse-papiers + encodage JPEG des images)
+- `PySide6` (GUI + presse-papiers + encodage JPEG des images + zone de
+  notification/QtNetwork pour le mode « barre d'état système »)
 - `PyYAML` (frontmatter)
 - `sqlite3` (stdlib, utilisé pour l'index local `settings_data/index.db`)
 - `urllib` (stdlib, utilisé pour les mises à jour — aucune dépendance ajoutée)
@@ -226,3 +262,5 @@ fenêtre affichée.
 5. **Phase 5 — Mise à jour** : `updater.py` (mises à jour automatiques depuis les
    releases GitHub ; remplacement de l'exécutable par renommage, sans script
    externe). Justification détaillée dans `AUTO_UPDATE_PLAN.md`.
+6. **Phase 6 — Confort d'usage** : mode « barre d'état système » (réduction dans la
+   zone de notification) et verrou mono-instance — `tray.py`, section ci-dessus.

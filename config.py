@@ -121,6 +121,9 @@ DEFAULT_SETTINGS = {
     "update_snooze_until": "",
     #: Version effectivement reportée par l'utilisateur.
     "update_snooze_version": "",
+    #: Fermer la fenêtre réduit l'application dans la zone de notification au
+    #: lieu de l'arrêter (l'arrêt réel passe par « Quitter »).
+    "close_to_tray": True,
 }
 
 
@@ -147,6 +150,9 @@ class Settings:
     update_snooze_until: str = ""
     #: Version reportée par l'utilisateur (« Plus tard »).
     update_snooze_version: str = ""
+    #: Fermer la fenêtre réduit l'application dans la zone de notification
+    #: (elle continue de tourner) au lieu de l'arrêter.
+    close_to_tray: bool = True
 
     @property
     def is_configured(self) -> bool:
@@ -170,6 +176,8 @@ def load_settings() -> Settings:
         settings.feed_last_seen = ""
     if not isinstance(settings.auto_check_updates, bool):
         settings.auto_check_updates = True
+    if not isinstance(settings.close_to_tray, bool):
+        settings.close_to_tray = True
     for name in ("last_update_check", "available_update", "update_snooze_until",
                  "update_snooze_version"):
         if not isinstance(getattr(settings, name), str):

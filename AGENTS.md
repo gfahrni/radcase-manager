@@ -34,6 +34,15 @@ presse-papiers, dans un **dossier réseau partagé**.
   (`settings_data/thumbs/`, reconstructible, jamais sur le partage). Décodage à
   la taille cible via `QImageReader.setScaledSize` : le plein format n'est jamais
   décodé pour l'affichage.
+- `tray.py` : **zone de notification** (icône + menu Ouvrir / Réglages / Quitter)
+  et **verrou mono-instance**. Fermer la fenêtre **réduit** l'application
+  (réglage `close_to_tray`, défaut `True`) ; l'arrêt réel passe par « Quitter ».
+  Le verrou est un **canal local nommé** (`QLocalServer`/`QLocalSocket`, nom
+  portant le compte de session) : un second lancement réveille la fenêtre
+  existante (accusé de réception ⇒ elle est vivante) puis s'arrête. **Pas de
+  `QLockFile`** (verrou orphelin après plantage) et **pas de
+  `setSocketOptions()`** : sur Unix (Qt 6.12), poser une option fait répondre
+  « succès » au second `listen()` — les deux instances se croient seules.
 - `updater.py` : **mise à jour automatique** depuis les releases GitHub (vérif en
   fond 1×/24 h, téléchargement, remplacement de l'exécutable par **renommage** —
   jamais d'écrasement d'un `.exe` en cours). Tout le transit (`.new`, `.part`,
@@ -50,6 +59,9 @@ presse-papiers, dans un **dossier réseau partagé**.
   l'ancienne — images introuvables et « Failed to remove temporary directory ».
   Ne pas retirer ce nettoyage.
   Aucune dépendance externe (hors `send2trash`, déjà requis).
+  **La mise à jour libère le verrou mono-instance avant de relancer**
+  (`MainWindow._apply_update`) : sinon la nouvelle version se croirait « seconde
+  instance » et sortirait aussitôt. Ne pas retirer cette libération.
 - `version.py` : version de l'application, **inscrite par la CI** au build à partir
   du tag ; un binaire de développement (``…dev``) désactive la mise à jour.
 - `main_gui.py` : interface PySide6 (onglets « Nouveau cas » / « Consulter »).
@@ -63,6 +75,10 @@ presse-papiers, dans un **dossier réseau partagé**.
   suppression via **send2trash**.
 - L'onglet « Consulter » n'affiche **rien par défaut** (recherche à la demande),
   pour ne pas saturer avec des milliers de cas.
+- Fermer la fenêtre **réduit** l'application dans la zone de notification
+  (`close_to_tray`) ; un vrai arrêt se fait par « Quitter » (menu Fichier ou
+  icône). Toute nouvelle voie de sortie doit passer par `MainWindow.quit_app`
+  (qui libère le verrou mono-instance), pas par `app.quit` directement.
 - Textes de l'UI et commentaires en **français**.
 - Ne pas modifier `archive/` : ce sont des instantanés par version (`v1/`, `v2.1/`…).
   Le travail actif se fait à la racine du projet.

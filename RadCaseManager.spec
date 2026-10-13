@@ -22,7 +22,8 @@ pathex = [SPECPATH]
 # Modules embarqués par PySide6 mais inutilisés par l'application : on les
 # exclut pour alléger nettement le binaire (WebEngine, Quick/QML et 3D pèsent
 # à eux seuls plusieurs centaines de Mo). L'application n'utilise que
-# QtCore / QtGui / QtWidgets.
+# QtCore / QtGui / QtWidgets (et QtNetwork pour le mode « barre d'état système »
+# et le verrou mono-instance, voir ``tray.py``).
 # En cas d'exécutable qui ne démarre plus après une évolution, commencer par
 # vider cette liste avant de chercher ailleurs.
 EXCLUDES = [

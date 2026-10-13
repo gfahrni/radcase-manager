@@ -52,6 +52,7 @@ import bootstrap
 import config
 import storage
 import thumbnails
+import tray
 import updater
 
 PREVIEW_W, PREVIEW_H = 400, 320
@@ -195,6 +196,18 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Mises à jour :", self.auto_update_checkbox)
 
+        # Fermeture de la fenêtre : réduction dans la zone de notification, ou
+        # arrêt. L'arrêt réel se fait toujours par « Quitter » (menu Fichier ou
+        # menu de l'icône).
+        self.close_to_tray_checkbox = QCheckBox(
+            "Réduire dans la zone de notification à la fermeture "
+            "(« Quitter » arrête l'application)"
+        )
+        self.close_to_tray_checkbox.setChecked(
+            bool(getattr(settings, "close_to_tray", True))
+        )
+        form.addRow("Fenêtre :", self.close_to_tray_checkbox)
+
         # Le dossier conditionne la liste des utilisateurs connus : on la
         # rafraîchit quand il change.
         self.folder_input.editingFinished.connect(self._reload_known_users)
@@ -258,6 +271,7 @@ class SettingsDialog(QDialog):
             available_update=initial.available_update,
             update_snooze_until=initial.update_snooze_until,
             update_snooze_version=initial.update_snooze_version,
+            close_to_tray=self.close_to_tray_checkbox.isChecked(),
         )
 
     def accept(self) -> None:  # noqa: D102
@@ -1464,11 +1478,17 @@ class _NaturalHeightPanel(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, settings: config.Settings):
+    def __init__(self, settings: config.Settings, single_instance=None):
         super().__init__()
         self.settings = settings
         self.current_image: QImage | None = None
         self._results: dict[int, storage.Case] = {}
+        #: Verrou mono-instance (``tray.SingleInstance``) : réveille cette fenêtre
+        #: quand l'utilisateur relance l'exécutable alors qu'elle est masquée.
+        self._single_instance = single_instance
+        #: Vrai pendant un arrêt voulu : la fermeture ne doit alors pas réduire
+        #: l'application dans la zone de notification.
+        self._quitting = False
 
         # Fil d'actualité : état de session pour la pastille de nouveauté
         # (défini avant la construction des onglets, qui lit cet état).
@@ -1504,6 +1524,13 @@ class MainWindow(QMainWindow):
         self.case_image.clicked.connect(self._show_selected_case_detail)
 
         self._build_status_bar()
+
+        # Zone de notification : l'application reste joignable quand sa fenêtre
+        # est fermée (réduction). ``None`` si le système n'en propose pas.
+        self._tray_hint_shown = False
+        self._tray = self._build_tray()
+        if single_instance is not None:
+            single_instance.activated.connect(self.restore_from_tray)
 
         # Badge de nouveauté du fil : vérification périodique (toutes les 5 min).
         self._feed_timer = QTimer(self)
@@ -3024,6 +3051,82 @@ class MainWindow(QMainWindow):
         self.run_search()  # rafraîchit la liste avec les mêmes critères
 
     # --- Réglages ---------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # Zone de notification (mode « barre d'état système »)
+    # ------------------------------------------------------------------ #
+    def _build_tray(self):
+        """Installe l'icône de la zone de notification, si disponible.
+
+        ``None`` quand le système n'en propose pas (ou environnement de test sans
+        affichage) : la fermeture quitte alors l'application, comportement
+        historique.
+        """
+        if not tray.TrayIcon.available():
+            return None
+        tray_icon = tray.TrayIcon(
+            _app_icon(),
+            self,
+            on_open=self.restore_from_tray,
+            on_settings=self._open_settings_from_tray,
+            on_quit=self.quit_app,
+        )
+        tray_icon.show()
+        return tray_icon
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        """Fermer la fenêtre **réduit** l'application dans la zone de notification.
+
+        L'application continue de tourner : elle reste accessible par son icône
+        (ou par un nouveau lancement de l'exécutable, qui réveille cette fenêtre
+        via le verrou mono-instance). L'arrêt réel passe par « Quitter ».
+        """
+        if self._quitting or self._tray is None or not self.settings.close_to_tray:
+            event.accept()
+            QApplication.quit()
+            return
+        event.ignore()
+        self.hide()
+        if not self._tray_hint_shown:
+            # Une seule fois par session : sinon la bulle devient vite pénible.
+            self._tray_hint_shown = True
+            self._tray.notify(
+                "RadCase Manager continue de tourner",
+                "L'application est réduite dans la zone de notification : cliquez "
+                "sur son icône pour la rouvrir, ou choisissez « Quitter » pour "
+                "l'arrêter vraiment.",
+            )
+
+    def restore_from_tray(self) -> None:
+        """Ramène la fenêtre au premier plan (icône, clic, second lancement)."""
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _open_settings_from_tray(self) -> None:
+        """Ouvre les réglages depuis l'icône : la fenêtre revient d'abord."""
+        self.restore_from_tray()
+        self.open_settings()
+
+    def quit_app(self) -> None:
+        """Arrête réellement l'application (menu « Fichier » ou icône → Quitter).
+
+        Le canal mono-instance est libéré **avant** de quitter : c'est ce qui
+        permet à un lancement immédiat (ou à la relance qui suit une mise à jour,
+        voir ``updater._relaunch``) de démarrer sans se croire seconde instance.
+        """
+        self._quitting = True
+        if self._tray is not None:
+            self._tray.hide()
+        self._release_single_instance()
+        QApplication.quit()
+
+    def _release_single_instance(self) -> None:
+        if self._single_instance is not None:
+            self._single_instance.release()
+
     def open_settings(self) -> None:
         dialog = SettingsDialog(self.settings, self)
         if dialog.exec() == QDialog.Accepted:
@@ -3224,9 +3327,14 @@ class MainWindow(QMainWindow):
 
     def _apply_update(self) -> None:
         """Remplace l'exécutable par la version téléchargée, puis relance."""
+        # La relance démarre une nouvelle version pendant que celle-ci s'arrête :
+        # on libère le canal mono-instance pour qu'elle prenne immédiatement la
+        # main (sinon elle se croirait « seconde instance » et sortirait aussitôt).
+        self._release_single_instance()
         try:
             updater.apply_update()
         except Exception as exc:  # noqa: BLE001 - remonté à l'utilisateur
+            self._reacquire_single_instance()
             QMessageBox.warning(
                 self,
                 "Mise à jour",
@@ -3236,7 +3344,15 @@ class MainWindow(QMainWindow):
             return
         updater.note_available(self.settings, "")  # la version installée va changer
         config.save_settings(self.settings)
-        QApplication.quit()
+        self.quit_app()
+
+    def _reacquire_single_instance(self) -> None:
+        """Reprend le verrou mono-instance après un échec de mise à jour."""
+        if self._single_instance is not None and not self._single_instance.acquire():
+            # Une autre instance a profité de la libération : cas très improbable,
+            # on la laisse vivre plutôt que d'écrire à deux sur le partage.
+            self._quitting = True
+            QApplication.quit()
 
     def _offer_pending_update(self) -> None:
         """Propose d'appliquer une mise à jour déjà téléchargée."""
@@ -3301,9 +3417,23 @@ def _set_windows_app_id() -> None:
 
 def main() -> int:
     _set_windows_app_id()
-    updater.cleanup()  # supprime les restes de la mise à jour précédente
     app = QApplication(sys.argv)
     app.setWindowIcon(_app_icon())
+    # La fermeture de la fenêtre peut se contenter de réduire l'application dans
+    # la zone de notification : c'est alors « Quitter » qui arrête le processus
+    # (voir ``MainWindow.closeEvent`` et ``MainWindow.quit_app``).
+    app.setQuitOnLastWindowClosed(False)
+
+    # Une seule instance par session utilisateur. Si l'application tourne déjà
+    # (fenêtre réduite dans la zone de notification), ce second lancement réveille
+    # la fenêtre existante et s'arrête : le dialogue de configuration n'apparaît
+    # donc jamais deux fois, et deux processus n'écrivent pas en même temps dans
+    # le dossier partagé.
+    single = tray.SingleInstance()
+    if not single.acquire():
+        return 0
+
+    updater.cleanup()  # supprime les restes de la mise à jour précédente
 
     settings = config.load_settings()
     if not settings.is_configured:
@@ -3316,11 +3446,11 @@ def main() -> int:
     bootstrap.ensure_shared_structure(settings.shared_root)
     _ensure_user_known(settings)
 
-    window = MainWindow(settings)
+    window = MainWindow(settings, single_instance=single)
     # Bouton de reconfiguration accessible depuis la barre de menus.
     menu = window.menuBar().addMenu("Fichier")
     menu.addAction("Réglages…", window.open_settings)
-    menu.addAction("Quitter", app.quit)
+    menu.addAction("Quitter", window.quit_app)
     # Vérification manuelle des mises à jour.
     help_menu = window.menuBar().addMenu("Aide")
     help_menu.addAction("Vérifier les mises à jour…", lambda: window.check_updates())

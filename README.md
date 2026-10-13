@@ -135,6 +135,27 @@ exécution depuis les sources) ne vérifie jamais les mises à jour.
 > Bureau est modifiable, l'application peut s'y remplacer elle-même sans droits
 > administrateur. Voir `AUTO_UPDATE_PLAN.md`.
 
+## Mode « barre d'état système » (zone de notification)
+
+Fermer la fenêtre **n'arrête pas** l'application : comme la plupart des petites
+applications portables, elle **se réduit dans la zone de notification** (le carré
+à côté de l'horloge) et continue de tourner. Un clic sur son icône la rouvre ;
+
+- **Ouvrir** — ramène la fenêtre au premier plan ;
+- **Réglages…** — ouvre la configuration ;
+- **Quitter** — arrête vraiment l'application (également dans **Fichier → Quitter**).
+
+Au premier passage en zone de notification, une bulle explique que l'application
+tourne toujours (l'icône peut être cachée derrière le « ^ » de Windows 11).
+
+- Le comportement est **réglable** : *Réglages… → Fenêtre* ; décoché, fermer la
+  fenêtre arrête l'application comme avant.
+- **Un seul lancement à la fois** : si l'application tourne déjà, double-cliquer
+  sur l'exécutable ne crée pas de second processus — il **réveille** la fenêtre
+  existante. Cela évite deux icônes et deux écritures simultanées dans le dossier
+  partagé. Le verrou est propre à chaque **compte machine** : sur un poste utilisé
+  par plusieurs personnes (sessions simultanées), chacun a bien la sienne.
+
 ## Structure du projet
 
 | Fichier | Rôle |
@@ -143,6 +164,7 @@ exécution depuis les sources) ne vérifie jamais les mises à jour.
 | `bootstrap.py` | initialisation du dossier partagé |
 | `storage.py` | création atomique, lecture et recherche des cas |
 | `thumbnails.py` | cache local des vignettes d'affichage |
+| `tray.py` | zone de notification (icône + menu) et verrou mono-instance |
 | `updater.py` | mise à jour automatique depuis les releases GitHub |
 | `version.py` | version de l'application (inscrite par la CI au build) |
 | `main_gui.py` | interface PySide6 |
@@ -195,3 +217,5 @@ python updater.py download    # télécharge l'exécutable dans le dossier coura
 - [x] Binaire portable Windows (PyInstaller) — voir `build_windows.bat`
 - [x] Mise à jour automatique depuis les releases GitHub — voir `updater.py` et
   `AUTO_UPDATE_PLAN.md`
+- [x] Mode « barre d'état système » (réduction dans la zone de notification) et
+  verrou mono-instance — voir `tray.py`
