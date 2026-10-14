@@ -43,6 +43,14 @@ presse-papiers, dans un **dossier réseau partagé**.
   `QLockFile`** (verrou orphelin après plantage) et **pas de
   `setSocketOptions()`** : sur Unix (Qt 6.12), poser une option fait répondre
   « succès » au second `listen()` — les deux instances se croient seules.
+  **Sous Windows**, le canal ne peut pas servir de verrou : `QLocalServer.listen()`
+  y **réussit toujours** (Qt crée le pipe avec `PIPE_UNLIMITED_INSTANCES`, sans
+  `FILE_FLAG_FIRST_PIPE_INSTANCE`, et `removeServer()` y est un no-op) — chaque
+  lancement créait donc une instance de plus (deux icônes). L'exclusivité y est
+  assurée par un **mutex nommé** (`CreateMutexW`, `_acquire_windows`) : atomique,
+  dans l'espace de la session, **libéré par l'OS à la mort du processus** (donc
+  sans le verrou orphelin qui avait fait écarter `QLockFile`). Le canal n'y sert
+  plus qu'au réveil.
 - `autostart.py` : **démarrage automatique à l'ouverture de session** (réglage
   `start_with_windows`, défaut `True`), via la clé `Run` du **compte courant**
   (`HKCU\…\CurrentVersion\Run`, aucun droit administrateur). L'entrée est

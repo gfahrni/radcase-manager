@@ -154,7 +154,10 @@ tourne toujours (l'icône peut être cachée derrière le « ^ » de Windows 11)
   sur l'exécutable ne crée pas de second processus — il **réveille** la fenêtre
   existante. Cela évite deux icônes et deux écritures simultanées dans le dossier
   partagé. Le verrou est propre à chaque **compte machine** : sur un poste utilisé
-  par plusieurs personnes (sessions simultanées), chacun a bien la sienne.
+  par plusieurs personnes (sessions simultanées), chacun a bien la sienne. Sous
+  Windows, l'exclusivité est garantie par un **mutex nommé** libéré par le système
+  à l'arrêt du processus (le canal local ne sert qu'au réveil : `listen()` y
+  réussit toujours, il ne peut pas faire office de verrou).
 
 ## Démarrage automatique à l'ouverture de session
 

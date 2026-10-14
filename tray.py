@@ -23,9 +23,22 @@ n'écoute, le canal est simplement recréé. Le nom du canal inclut le nom
 d'utilisateur système : sur un poste partagé (bureau à distance, session
 multi-utilisateur), chacun a bien sa propre instance — les réglages locaux étant
 eux aussi propres au compte machine, c'est la bonne granularité.
+
+**Sous Windows**, en revanche, le canal ne peut pas servir de verrou :
+``QLocalServer.listen()`` y **réussit toujours**, même si une autre instance
+écoute déjà (Qt crée le pipe avec ``PIPE_UNLIMITED_INSTANCES`` et sans
+``FILE_FLAG_FIRST_PIPE_INSTANCE``, et ``removeServer()`` n'y fait rien). Le test
+« on écoute donc on est seuls » y serait donc inopérant et chaque lancement
+créerait une instance de plus. L'exclusivité est donc assurée par un **mutex
+nommé** (:meth:`SingleInstance._acquire_mutex`) : atomique, il vit dans l'espace
+de la session, et l'OS le **libère à la mort du processus**, plantage compris —
+sans l'inconvénient du verrou orphelin qui avait fait écarter ``QLockFile``. Le
+canal local reste, lui, le support du réveil de l'instance existante.
 """
 from __future__ import annotations
 
+import ctypes
+import sys
 import time
 
 from PySide6.QtCore import QObject, Signal
@@ -52,6 +65,34 @@ ACQUIRE_DELAY_S = 0.4
 #: Durée d'affichage des notifications (millisecondes).
 NOTIFY_MS = 6000
 
+#: Code d'erreur Windows « l'objet nommé existe déjà » (``ERROR_ALREADY_EXISTS``).
+ERROR_ALREADY_EXISTS = 183
+
+#: ``kernel32`` chargé paresseusement sous Windows (voir :func:`_kernel32`).
+_KERNEL32 = None
+
+
+def _kernel32():
+    """Charge ``kernel32`` une seule fois et déclare les prototypes utilisés.
+
+    Appelée uniquement sous Windows : ``ctypes.wintypes`` n'existe pas sur les
+    autres plateformes (l'import lèverait ``ValueError``), et le module doit
+    rester importable en développement sous macOS.
+    """
+    global _KERNEL32
+    if _KERNEL32 is None:
+        from ctypes import wintypes  # Windows uniquement
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # Sans ``restype``, ctypes supposerait un entier 32 bits et tronquerait
+        # le handle : ``CloseHandle`` échouerait ensuite silencieusement.
+        k32.CreateMutexW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
+        k32.CreateMutexW.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        k32.CloseHandle.restype = wintypes.BOOL
+        _KERNEL32 = k32
+    return _KERNEL32
+
 
 def _channel_name() -> str:
     """Nom du canal local, propre à l'application et au compte de session.
@@ -66,7 +107,13 @@ def _channel_name() -> str:
 class SingleInstance(QObject):
     """Garantit qu'une seule instance tourne par session utilisateur.
 
-    Ordre des opérations à l'acquisition :
+    **Sous Windows**, le verrou est un **mutex nommé** (voir
+    :meth:`_acquire_mutex`) : ``QLocalServer.listen()`` y réussit toujours, même
+    si une autre instance écoute déjà, il ne peut donc pas servir de verrou.
+    Le canal local n'y est que le support du réveil.
+
+    **Ailleurs (macOS, Linux)**, où ``listen()`` échoue bien si le fichier socket
+    existe déjà, l'ordre des opérations à l'acquisition est :
 
     1. **Écouter** sur le canal nommé. Si cela réussit, nous sommes seuls.
     2. Sinon, un autre processus écoute : on s'y **connecte** et on attend son
@@ -83,7 +130,7 @@ class SingleInstance(QObject):
 
     Le verrou est **libéré** par :meth:`release` (fermeture propre) ou par la fin
     du processus — la fermeture du canal suffit, il n'y a aucun fichier à
-    nettoyer.
+    nettoyer, et l'OS libère le mutex Windows de lui-même.
     """
 
     #: Émis quand un autre lancement demande à remonter la fenêtre existante.
@@ -93,6 +140,9 @@ class SingleInstance(QObject):
         super().__init__(parent)
         self._name = _channel_name()
         self._server: QLocalServer | None = None
+        #: Handle du mutex nommé (Windows uniquement), libéré par l'OS à la mort
+        #: du processus même en cas de plantage.
+        self._mutex = None
 
     # -- Acquisition / libération ----------------------------------------- #
     def acquire(self) -> bool:
@@ -102,6 +152,9 @@ class SingleInstance(QObject):
         instance tourne déjà (elle a été réveillée si possible) : l'appelant doit
         alors s'arrêter.
         """
+        if sys.platform == "win32":
+            return self._acquire_windows()
+
         for attempt in range(ACQUIRE_ATTEMPTS):
             server = QLocalServer(self)
             # Volontairement SANS ``setSocketOptions`` : sur Unix (Qt 6.12), poser
@@ -131,14 +184,64 @@ class SingleInstance(QObject):
         # seconde instance plutôt que de risquer des écritures concurrentes.
         return False
 
+    def _acquire_windows(self) -> bool:
+        """Exclusivité sous Windows : **mutex nommé**, puis canal pour le réveil.
+
+        Le test « on écoute donc on est seuls » est inopérant ici : Qt crée le
+        pipe avec ``PIPE_UNLIMITED_INSTANCES`` et sans
+        ``FILE_FLAG_FIRST_PIPE_INSTANCE``, donc ``listen()`` réussit toujours,
+        même si une autre instance écoute déjà — et ``removeServer()`` n'y fait
+        rien. Le mutex, lui, est **atomique** et l'OS le libère à la mort du
+        processus (plantage compris) : aucun verrou orphelin.
+        """
+        if not self._acquire_mutex():
+            # Une instance tourne déjà : on la réveille puis on rend la main.
+            self._wake_existing()
+            return False
+
+        # Seuls au monde : le canal local ne sert plus qu'à recevoir les
+        # prochaines demandes de réveil. Son ``listen`` ne peut pas échouer.
+        server = QLocalServer(self)
+        server.listen(self._name)
+        server.newConnection.connect(self._on_connection)
+        self._server = server
+        return True
+
+    def _acquire_mutex(self) -> bool:
+        """Crée le mutex de session ; faux si une instance le détient déjà.
+
+        ``bInitialOwner=False`` : on ne recherche pas la *propriété* du mutex
+        (qui exigerait un ``ReleaseMutex``), seulement l'existence de l'objet
+        tant que ce processus vit. Le handle n'est donc jamais « oublié ».
+        Sans préfixe, le nom vit dans l'espace de la **session** : chaque
+        session utilisateur (bureau à distance) garde bien son instance.
+        """
+        k32 = _kernel32()
+        self._mutex = k32.CreateMutexW(None, False, self._name)
+        if not self._mutex:
+            return False  # création impossible : on refuse de démarrer
+        if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+            k32.CloseHandle(self._mutex)
+            self._mutex = None
+            return False
+        return True
+
     def release(self) -> None:
-        """Libère le canal (fermeture propre, ou avant une relance). Idempotent."""
+        """Libère le canal et le mutex (fermeture propre, ou avant une relance).
+
+        Idempotent. Sous Windows, fermer le handle libère le mutex : la nouvelle
+        version peut alors prendre la main (voir ``updater``, qui libère le
+        verrou avant de relancer).
+        """
         if self._server is not None:
             self._server.close()
             self._server.setParent(None)  # l'objet Python reprend la propriété
             self._server = None
         # Pas de ``removeServer`` ici : fermer le canal suffit, et cela
         # supprimerait le canal d'une instance qui aurait repris la main.
+        if self._mutex:
+            _kernel32().CloseHandle(self._mutex)
+            self._mutex = None
 
     # -- Interne ---------------------------------------------------------- #
     def _wake_existing(self) -> bool:
