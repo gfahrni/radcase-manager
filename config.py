@@ -124,6 +124,10 @@ DEFAULT_SETTINGS = {
     #: Fermer la fenêtre réduit l'application dans la zone de notification au
     #: lieu de l'arrêter (l'arrêt réel passe par « Quitter »).
     "close_to_tray": True,
+    #: Inscrire l'application au démarrage de Windows (clé « Run » du compte) :
+    #: elle se lance alors **réduite** dans la zone de notification, sans que le
+    #: radiologue ait à y penser après un redémarrage. Voir ``autostart.py``.
+    "start_with_windows": True,
 }
 
 
@@ -153,6 +157,9 @@ class Settings:
     #: Fermer la fenêtre réduit l'application dans la zone de notification
     #: (elle continue de tourner) au lieu de l'arrêter.
     close_to_tray: bool = True
+    #: Lancement automatique à l'ouverture de session Windows (réduit dans la
+    #: zone de notification). Reflété dans le registre par ``autostart.sync``.
+    start_with_windows: bool = True
 
     @property
     def is_configured(self) -> bool:
@@ -178,6 +185,8 @@ def load_settings() -> Settings:
         settings.auto_check_updates = True
     if not isinstance(settings.close_to_tray, bool):
         settings.close_to_tray = True
+    if not isinstance(settings.start_with_windows, bool):
+        settings.start_with_windows = True
     for name in ("last_update_check", "available_update", "update_snooze_until",
                  "update_snooze_version"):
         if not isinstance(getattr(settings, name), str):

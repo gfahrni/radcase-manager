@@ -43,6 +43,14 @@ presse-papiers, dans un **dossier réseau partagé**.
   `QLockFile`** (verrou orphelin après plantage) et **pas de
   `setSocketOptions()`** : sur Unix (Qt 6.12), poser une option fait répondre
   « succès » au second `listen()` — les deux instances se croient seules.
+- `autostart.py` : **démarrage automatique à l'ouverture de session** (réglage
+  `start_with_windows`, défaut `True`), via la clé `Run` du **compte courant**
+  (`HKCU\…\CurrentVersion\Run`, aucun droit administrateur). L'entrée est
+  **réécrite à chaque démarrage** (`sync`) : déplacer l'exécutable portable ne
+  casse pas le lancement. Elle porte l'argument `--minimized` — `main_gui.main`
+  le retire avant `QApplication` et démarre alors **réduit dans la zone de
+  notification**. Sans effet hors Windows ou pour un binaire non « frozen »
+  (`is_supported`).
 - `updater.py` : **mise à jour automatique** depuis les releases GitHub (vérif en
   fond 1×/24 h, téléchargement, remplacement de l'exécutable par **renommage** —
   jamais d'écrasement d'un `.exe` en cours). Tout le transit (`.new`, `.part`,

@@ -156,6 +156,23 @@ tourne toujours (l'icône peut être cachée derrière le « ^ » de Windows 11)
   partagé. Le verrou est propre à chaque **compte machine** : sur un poste utilisé
   par plusieurs personnes (sessions simultanées), chacun a bien la sienne.
 
+## Démarrage automatique à l'ouverture de session
+
+Pour qu'un poste soit prêt sans que personne ait à y penser, l'application peut se
+**lancer toute seule après un redémarrage** — *Réglages… → Démarrage* (activée par
+défaut). Elle démarre alors **réduite dans la zone de notification** : prête à
+recevoir une image collée, sans imposer sa fenêtre à l'ouverture de session.
+
+- Techniquement, l'application s'inscrit dans la clé **`Run` du compte courant**
+  (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), la même que celle listée
+  par Windows dans « Applications de démarrage » : **aucun droit administrateur** ;
+- l'entrée est **réécrite à chaque lancement** avec le chemin courant de
+  l'exécutable : déplacer le `.exe` ne casse pas le démarrage automatique ;
+- elle vaut pour le **compte Windows** concerné, pas pour tout le poste ; décocher
+  l'option retire l'entrée (l'application n'est plus lancée automatiquement).
+
+Voir `autostart.py`.
+
 ## Structure du projet
 
 | Fichier | Rôle |
@@ -165,6 +182,7 @@ tourne toujours (l'icône peut être cachée derrière le « ^ » de Windows 11)
 | `storage.py` | création atomique, lecture et recherche des cas |
 | `thumbnails.py` | cache local des vignettes d'affichage |
 | `tray.py` | zone de notification (icône + menu) et verrou mono-instance |
+| `autostart.py` | inscription au démarrage de Windows (clé `Run` du compte) |
 | `updater.py` | mise à jour automatique depuis les releases GitHub |
 | `version.py` | version de l'application (inscrite par la CI au build) |
 | `main_gui.py` | interface PySide6 |
@@ -219,3 +237,5 @@ python updater.py download    # télécharge l'exécutable dans le dossier coura
   `AUTO_UPDATE_PLAN.md`
 - [x] Mode « barre d'état système » (réduction dans la zone de notification) et
   verrou mono-instance — voir `tray.py`
+- [x] Lancement automatique à l'ouverture de session Windows (réduit dans la zone
+  de notification) — voir `autostart.py`

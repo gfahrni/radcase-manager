@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import autostart
 import bootstrap
 import config
 import storage
@@ -208,6 +209,22 @@ class SettingsDialog(QDialog):
         )
         form.addRow("Fenêtre :", self.close_to_tray_checkbox)
 
+        # Démarrage automatique à l'ouverture de session Windows : l'application
+        # se lance réduite dans la zone de notification, pour que le poste soit
+        # prêt après un redémarrage sans que personne ait à y penser. La case
+        # n'apparaît que là où le réglage est applicable (Windows, binaire
+        # empaqueté) : ailleurs, elle serait trompeuse (voir ``autostart``).
+        self.autostart_checkbox = None
+        if autostart.is_supported():
+            self.autostart_checkbox = QCheckBox(
+                "Lancer RadCase Manager à l'ouverture de Windows "
+                "(réduit dans la zone de notification)"
+            )
+            self.autostart_checkbox.setChecked(
+                bool(getattr(settings, "start_with_windows", True))
+            )
+            form.addRow("Démarrage :", self.autostart_checkbox)
+
         # Le dossier conditionne la liste des utilisateurs connus : on la
         # rafraîchit quand il change.
         self.folder_input.editingFinished.connect(self._reload_known_users)
@@ -272,6 +289,11 @@ class SettingsDialog(QDialog):
             update_snooze_until=initial.update_snooze_until,
             update_snooze_version=initial.update_snooze_version,
             close_to_tray=self.close_to_tray_checkbox.isChecked(),
+            start_with_windows=(
+                self.autostart_checkbox.isChecked()
+                if self.autostart_checkbox is not None
+                else bool(getattr(initial, "start_with_windows", True))
+            ),
         )
 
     def accept(self) -> None:  # noqa: D102
@@ -3096,6 +3118,14 @@ class MainWindow(QMainWindow):
                 "l'arrêter vraiment.",
             )
 
+    def can_reduce_at_startup(self) -> bool:
+        """Vrai si l'application peut démarrer **sans afficher** sa fenêtre.
+
+        Uniquement si la zone de notification est disponible : sinon la fenêtre
+        n'aurait aucun moyen d'être rouverte (voir ``main``).
+        """
+        return self._tray is not None
+
     def restore_from_tray(self) -> None:
         """Ramène la fenêtre au premier plan (icône, clic, second lancement)."""
         if self.isMinimized():
@@ -3132,6 +3162,9 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.Accepted:
             self.settings = dialog.result_settings()
             config.save_settings(self.settings)
+            # Le réglage de démarrage automatique se reflète dans le registre :
+            # c'est ici qu'on l'applique, une fois le dialogue validé.
+            autostart.sync(self.settings.start_with_windows)
             bootstrap.ensure_shared_structure(self.settings.shared_root)
             _ensure_user_known(self.settings)
             self.reload_units()
@@ -3416,6 +3449,13 @@ def _set_windows_app_id() -> None:
 
 
 def main() -> int:
+    # L'argument « --minimized » est posé par le démarrage automatique (voir
+    # ``autostart``) : il est retiré **avant** QApplication, qui analyse la ligne
+    # de commande et n'a que faire de nos propres options.
+    start_minimized = autostart.START_MINIMIZED_FLAG in sys.argv
+    if start_minimized:
+        sys.argv.remove(autostart.START_MINIMIZED_FLAG)
+
     _set_windows_app_id()
     app = QApplication(sys.argv)
     app.setWindowIcon(_app_icon())
@@ -3446,6 +3486,11 @@ def main() -> int:
     bootstrap.ensure_shared_structure(settings.shared_root)
     _ensure_user_known(settings)
 
+    # Démarrage automatique : on (ré)inscrit l'exécutable avec son chemin
+    # courant — il a pu être déplacé depuis la dernière fois — ou on retire
+    # l'entrée si l'utilisateur a décoché le réglage. Sans effet hors Windows.
+    autostart.sync(settings.start_with_windows)
+
     window = MainWindow(settings, single_instance=single)
     # Bouton de reconfiguration accessible depuis la barre de menus.
     menu = window.menuBar().addMenu("Fichier")
@@ -3455,7 +3500,13 @@ def main() -> int:
     help_menu = window.menuBar().addMenu("Aide")
     help_menu.addAction("Vérifier les mises à jour…", lambda: window.check_updates())
 
-    window.show()
+    # Démarrage lancé par Windows (« --minimized ») : la fenêtre reste masquée,
+    # l'application est joignable par son icône. Repli sur l'affichage normal si
+    # la zone de notification n'existe pas — sinon la fenêtre serait
+    # inaccessible.
+    reduce_at_start = start_minimized and window.can_reduce_at_startup()
+    if not reduce_at_start:
+        window.show()
     return app.exec()
 
 
