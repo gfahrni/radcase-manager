@@ -364,6 +364,30 @@ def _run_ocr(enabled: bool, directory: Path, image_name: Optional[str]) -> tuple
         return "", ocr_backend.STATUS_FAILED
 
 
+def _request_number_from_image(
+    directory: Path,
+    image_name: Optional[str],
+    fallback_text: str,
+) -> str:
+    """Extrait le numéro de la zone supérieure gauche, puis du texte complet.
+
+    La zone ciblée (20 % × 20 %, agrandie ×3) est bien plus fiable pour le
+    préfixe et les petits caractères. Si elle ne donne rien, on retombe sur le
+    texte OCR complet pour ne pas régresser sur les anciennes images.
+    """
+    if not image_name:
+        return extract_request_number(fallback_text)
+    try:
+        # Le moteur est déjà chaud après l'OCR complet : 8 s suffisent
+        # largement pour un crop de 4 % de l'image, et bornent l'attente.
+        region_text, _ = ocr_backend.extract_text_region(
+            directory / image_name, timeout=8.0
+        )
+    except Exception:  # noqa: BLE001 - best-effort
+        region_text = ""
+    return extract_request_number(region_text) or extract_request_number(fallback_text)
+
+
 # --- Écriture ---------------------------------------------------------------
 
 
@@ -424,7 +448,12 @@ def create_case(
 
         ocr_text, ocr_status = _run_ocr(ocr, tmp_dir, image_name)
         if request_number is None:
-            request_number = extract_request_number(ocr_text)
+            if ocr and image_name:
+                request_number = _request_number_from_image(
+                    tmp_dir, image_name, ocr_text
+                )
+            else:
+                request_number = extract_request_number(ocr_text)
         else:
             request_number = request_number.strip()
 
@@ -521,7 +550,7 @@ def update_case(
         # 1) Image : conserver, retirer, ou remplacer.
         image_name: Optional[str] = None
         ocr_text, ocr_status = "", ""
-        old_ocr_text = case.ocr_text
+        had_ocr_text = bool(case.ocr_text)
         if image is KEEP_IMAGE:
             if case.image and (final_dir / case.image).exists():
                 shutil.copy2(final_dir / case.image, tmp_dir / case.image)
@@ -536,9 +565,13 @@ def update_case(
                     if case.request_number:
                         # Valeur déjà stockée (ou déduite à la lecture).
                         request_number = case.request_number
-                    elif not old_ocr_text and ocr_text:
-                        # OCR rattrapé à l'instant : on en profite.
-                        request_number = extract_request_number(ocr_text)
+                    elif ocr and image_name and not had_ocr_text:
+                        # Aucun OCR existant (ou rattrapage) : on tente la zone
+                        # ciblée. Si un texte OCR existait déjà, il a déjà été
+                        # exploité et une valeur vide est un choix explicite.
+                        request_number = _request_number_from_image(
+                            tmp_dir, image_name, ocr_text
+                        )
                     else:
                         request_number = ""
                 else:
@@ -551,7 +584,12 @@ def update_case(
             image_name = _save_image(image, tmp_dir)
             ocr_text, ocr_status = _run_ocr(ocr, tmp_dir, image_name)
             if request_number is None:
-                request_number = extract_request_number(ocr_text)
+                if ocr and image_name:
+                    request_number = _request_number_from_image(
+                        tmp_dir, image_name, ocr_text
+                    )
+                else:
+                    request_number = extract_request_number(ocr_text)
             else:
                 request_number = request_number.strip()
         else:

@@ -25,12 +25,13 @@ partagé**.
   texte est stocké dans `case.md` (`ocr_text` / `ocr_status`) et ajouté à
   l'index local. La lecture et l'écriture se font dans un thread de fond : la
   fenêtre ne se fige jamais, et un échec OCR n'empêche pas l'enregistrement.
-- **Numéro de demande** : extrait automatiquement du texte OCR (au moins
-  10 lettres/chiffres consécutifs, préfixe `L`, `R` ou `E`, au moins 8 chiffres ;
-  un `1` initial est corrigé en `L`), stocké dans `case.md`
-  (`request_number`), affiché à droite du titre dans le plein écran et dans la
-  Recherche Avancée, et exporté dans une colonne dédiée. Il est prérempli et
-  corrigeable dans l'onglet Édition.
+- **Numéro de demande** : extrait en priorité par un **OCR ciblé** sur le coin
+  supérieur gauche de l'image (20 % × 20 %, agrandi ×3), avec repli sur le texte
+  OCR complet. Règle : au moins 10 lettres/chiffres consécutifs, préfixe `L`,
+  `R` ou `E`, au moins 8 chiffres ; un `1` initial est corrigé en `L`. Stocké
+  dans `case.md` (`request_number`), affiché à droite du titre dans le plein
+  écran et dans la Recherche Avancée, et exporté dans une colonne dédiée. Il
+  est prérempli et corrigeable dans l'onglet Édition.
 - **Dossier partagé par défaut (Windows)** :
   `N:/RAD/COMMUN/radcase-manager/DATABASE-RAD-CHUV`, modifiable dans les
   réglages.

@@ -228,11 +228,12 @@ par **`Windows.Media.Ocr`** (paquets `winrt-*`), sans modèle ni appel réseau.
 - **Stockage** : `ocr_text` / `ocr_status` dans le frontmatter YAML, colonnes
   correspondantes dans l'index local (schéma v4). La recherche OCR est
   optionnelle (`search_cases(..., include_ocr=True)`), désactivée par défaut.
-- **Numéro de demande** : déduit du texte OCR (au moins 10 lettres/chiffres
-  consécutifs, préfixe `L`/`R`/`E`, au moins 8 chiffres, `1` initial corrigé en
-  `L`), stocké dans `request_number`, indexé, affiché dans le plein écran et la
-  Recherche Avancée, exporté dans une colonne dédiée et corrigeable dans
-  l'onglet Édition.
+- **Numéro de demande** : second OCR **ciblé** sur le coin supérieur gauche
+  (20 % × 20 % de l'image, agrandi ×3), avec repli sur le texte OCR complet.
+  Règle : au moins 10 lettres/chiffres consécutifs, préfixe `L`/`R`/`E`, au
+  moins 8 chiffres, `1` initial corrigé en `L`. Stocké dans `request_number`,
+  indexé, affiché dans le plein écran et la Recherche Avancée, exporté dans une
+  colonne dédiée et corrigeable dans l'onglet Édition.
 - **Anciens cas** : pas d'OCR rétroactif en v5.1 ; un cas v5.0 sans
   `request_number` le déduit à la lecture de son `ocr_text`, puis l'écrit au
   prochain enregistrement.

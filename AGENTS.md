@@ -46,6 +46,9 @@ presse-papiers, dans un **dossier réseau partagé**.
   `ok` / `empty` / `unsupported` / `failed` / `timeout`, jamais d'exception.
   Le texte est calculé pendant `storage.create_case()` / `update_case()`, donc
   dans le worker de sauvegarde, jamais dans le thread de l'interface.
+  Le **numéro de demande** bénéficie d'un second OCR ciblé sur le coin
+  supérieur gauche (20 % × 20 % de l'image, agrandi ×3), avec repli sur le texte
+  complet ; la zone est un choix produit, sans marge.
 - `thumbnails.py` : cache local des **vignettes d'affichage**
   (`settings_data/thumbs/`, reconstructible, jamais sur le partage). Décodage à
   la taille cible via `QImageReader.setScaledSize` : le plein format n'est jamais
@@ -116,7 +119,9 @@ presse-papiers, dans un **dossier réseau partagé**.
   des résultats. Les anciens cas restent sans texte jusqu'à un rattrapage.
 - Numéro de demande : `request_number` dans `case.md` et l'index. Règle :
   10+ caractères alphanumériques consécutifs, préfixe `L`/`R`/`E`, au moins
-  8 chiffres, `1` initial corrigé en `L`. Affiché à droite du titre dans le
+  8 chiffres, `1` initial corrigé en `L`. L'extraction utilise d'abord l'OCR
+  ciblé du coin supérieur gauche (20 % × 20 %, agrandi ×3), puis le texte OCR
+  complet en repli. Affiché à droite du titre dans le
   plein écran et dans la Recherche Avancée ; colonne **« N° de demande »** dans
   l'export CSV/Excel. Le champ est prérempli et modifiable dans l'onglet
   Édition ; une valeur vide explicite fait foi.

@@ -11,9 +11,15 @@ initialise le mode d'appartement du thread au premier import, et cette
 initialisation ne peut pas être refaite dans un autre thread. On réutilise donc
 toujours le même thread de travail, via une file de tâches.
 
-L'OCR est **best-effort** : :func:`extract_text` ne lève jamais. En cas de pack
-de langue manquant, d'image illisible, de délai dépassé ou de toute autre
-erreur, il retourne un texte vide et un statut explicite.
+L'OCR est **best-effort** : :func:`extract_text` et
+:func:`extract_text_region` ne lèvent jamais. En cas de pack de langue manquant,
+d'image illisible, de délai dépassé ou de toute autre erreur, ils retournent un
+texte vide et un statut explicite.
+
+Le numéro de demande est toujours dans le **quart supérieur gauche** (20 % de
+la largeur et 20 % de la hauteur, sans marge) : :func:`extract_text_region` y
+applique un OCR ciblé, agrandi, pour améliorer la lecture des petits caractères
+et éviter de confondre le préfixe avec un mot du reste de l'écran.
 """
 from __future__ import annotations
 
@@ -41,6 +47,12 @@ OCR_TIMEOUT_SECONDS = 15.0
 #: d'écran habituelles sont très en dessous ; seules les images gigantesques
 #: sont réduites avant OCR.
 MAX_IMAGE_DIMENSION = 10000
+
+#: Zone du numéro de demande : 20 % de la largeur et 20 % de la hauteur, depuis
+#: le coin supérieur gauche, sans marge (choix validé : la zone est large).
+REQUEST_REGION = (0.0, 0.0, 0.20, 0.20)
+#: Agrandissement appliqué à cette zone avant OCR (petits caractères).
+REQUEST_REGION_SCALE = 3.0
 
 # File de tâches traitée par le thread OCR unique. Les éléments sont des tuples
 # ``(rgba, largeur, hauteur, Future)``.
@@ -94,13 +106,51 @@ def extract_text(
 
     Ne lève jamais : l'appelant peut enregistrer le cas dans tous les cas.
     """
+    return _extract(image_path, timeout=timeout)
+
+
+def extract_text_region(
+    image_path: str | Path,
+    *,
+    left: float = REQUEST_REGION[0],
+    top: float = REQUEST_REGION[1],
+    right: float = REQUEST_REGION[2],
+    bottom: float = REQUEST_REGION[3],
+    scale: float = REQUEST_REGION_SCALE,
+    timeout: float = OCR_TIMEOUT_SECONDS,
+) -> Tuple[str, str]:
+    """OCR ciblé sur une région relative de l'image (fractions 0–1).
+
+    Sert au numéro de demande, toujours dans le coin supérieur gauche. La zone
+    est recadrée puis agrandie (``scale``) avant OCR : les petits caractères
+    sont mieux lus et les mots du reste de l'écran ne polluent pas le résultat.
+    Mêmes statuts et même garantie de non-exception que :func:`extract_text`.
+    """
+    return _extract(
+        image_path,
+        region=(left, top, right, bottom),
+        scale=scale,
+        timeout=timeout,
+    )
+
+
+def _extract(
+    image_path: str | Path,
+    *,
+    region: Tuple[float, float, float, float] | None = None,
+    scale: float = 1.0,
+    timeout: float = OCR_TIMEOUT_SECONDS,
+) -> Tuple[str, str]:
+    """Implémentation commune : préparation image puis file OCR."""
     global _last_error
 
     if not is_supported():
         return "", STATUS_UNSUPPORTED
 
     try:
-        rgba, width, height = _load_rgba(Path(image_path))
+        rgba, width, height = _load_rgba(
+            Path(image_path), region=region, scale=scale
+        )
     except Exception as exc:  # noqa: BLE001 - l'OCR ne doit jamais bloquer
         _last_error = f"Image illisible pour l'OCR : {exc}"
         return "", STATUS_FAILED
@@ -239,15 +289,23 @@ async def _recognize_async(engine, bitmap):
 # --------------------------------------------------------------------------- #
 # Préparation de l'image (Qt, dans le thread appelant)
 # --------------------------------------------------------------------------- #
-def _load_rgba(path: Path) -> Tuple[bytes, int, int]:
+def _load_rgba(
+    path: Path,
+    *,
+    region: Tuple[float, float, float, float] | None = None,
+    scale: float = 1.0,
+) -> Tuple[bytes, int, int]:
     """Décode l'image et retourne ses pixels RGBA, sans canal alpha.
 
     Le décodage est fait côté Qt (comme l'enregistrement JPEG), pas côté WinRT :
     on évite ainsi les problèmes de chemins UNC / partage réseau et de flux
     WinRT. Les images avec transparence sont composées sur fond blanc, sinon
     les zones transparentes seraient lues comme du noir.
+
+    ``region`` est un tuple de fractions ``(gauche, haut, droite, bas)`` ; la
+    zone est recadrée avant l'éventuel agrandissement ``scale``.
     """
-    from PySide6.QtCore import QSize, Qt
+    from PySide6.QtCore import QRect, QSize, Qt
     from PySide6.QtGui import QImage, QImageReader, QPainter
 
     reader = QImageReader(str(path))
@@ -270,6 +328,38 @@ def _load_rgba(path: Path) -> Tuple[bytes, int, int]:
         image = QImage(str(path))
     if image.isNull():
         raise RuntimeError("format d'image non reconnu")
+
+    if region is not None:
+        left, top, right, bottom = region
+        left = max(0.0, min(1.0, left))
+        top = max(0.0, min(1.0, top))
+        right = max(0.0, min(1.0, right))
+        bottom = max(0.0, min(1.0, bottom))
+        if right <= left or bottom <= top:
+            raise ValueError("région OCR invalide")
+        x0 = min(image.width() - 1, int(round(image.width() * left)))
+        y0 = min(image.height() - 1, int(round(image.height() * top)))
+        width = max(1, int(round(image.width() * (right - left))))
+        height = max(1, int(round(image.height() * (bottom - top))))
+        width = min(width, image.width() - x0)
+        height = min(height, image.height() - y0)
+        image = image.copy(QRect(x0, y0, width, height))
+
+    if scale > 1.0:
+        image = image.scaled(
+            max(1, round(image.width() * scale)),
+            max(1, round(image.height() * scale)),
+            Qt.IgnoreAspectRatio,
+            Qt.SmoothTransformation,
+        )
+
+    if max(image.width(), image.height()) > MAX_IMAGE_DIMENSION:
+        image = image.scaled(
+            MAX_IMAGE_DIMENSION,
+            MAX_IMAGE_DIMENSION,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
 
     if image.hasAlphaChannel():
         canvas = QImage(image.size(), QImage.Format_RGB32)
