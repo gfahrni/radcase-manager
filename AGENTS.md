@@ -16,12 +16,16 @@ presse-papiers, dans un **dossier réseau partagé**.
   `visibility` = `public` (défaut) ou `private` (masqué de la recherche des autres).
   Le texte OCR (IPP, annotations…) est écrit **avant** le renommage atomique : un
   cas visible est toujours complet. Le **numéro de demande** est déduit de ce
-  texte (premier groupe d'au moins 10 lettres/chiffres consécutifs, avec au moins
-  un chiffre) et peut être corrigé dans l'onglet Édition.
+  texte (au moins 10 lettres/chiffres consécutifs, commençant par `L`, `R` ou
+  `E`, avec au moins 8 chiffres ; un `1` initial est corrigé en `L`) et peut
+  être corrigé dans l'onglet Édition.
 - **Pas de SQLite** (choix délibéré) : les cas sont **figés** (append-only), donc
   écriture dans un dossier temporaire `.tmp_<id>` puis `os.rename` **atomique**.
 - Réglages locaux **par utilisateur système** dans `settings_data/settings.json`,
-  sous `%LOCALAPPDATA%\RadCaseManager\` (Windows) ; jamais sur le partage. Le nom
+  sous `%LOCALAPPDATA%\RadCaseManager\` (Windows) ; jamais sur le partage. Le
+  dossier partagé proposé par défaut est
+  `N:/RAD/COMMUN/radcase-manager/DATABASE-RAD-CHUV` (`config.DEFAULT_SHARED_ROOT`),
+  modifiable dans les réglages. Le nom
   d'auteur est celui du **compte de session Windows** (nom de connexion) ; il est
   ajouté automatiquement à `users.json` et choisi uniquement parmi les
   utilisateurs connus (pas de saisie libre).
@@ -110,10 +114,12 @@ presse-papiers, dans un **dossier réseau partagé**.
   `case.md` et dans l'index local ; `search_cases(..., include_ocr=True)` permet
   de l'inclure dans la recherche, désactivé par défaut. Aucun OCR dans l'export
   des résultats. Les anciens cas restent sans texte jusqu'à un rattrapage.
-- Numéro de demande : `request_number` dans `case.md` et l'index. Affiché à
-  droite du titre dans le plein écran et dans la Recherche Avancée ; colonne
-  **« N° de demande »** dans l'export CSV/Excel. Le champ est prérempli et
-  modifiable dans l'onglet Édition ; une valeur vide explicite fait foi.
+- Numéro de demande : `request_number` dans `case.md` et l'index. Règle :
+  10+ caractères alphanumériques consécutifs, préfixe `L`/`R`/`E`, au moins
+  8 chiffres, `1` initial corrigé en `L`. Affiché à droite du titre dans le
+  plein écran et dans la Recherche Avancée ; colonne **« N° de demande »** dans
+  l'export CSV/Excel. Le champ est prérempli et modifiable dans l'onglet
+  Édition ; une valeur vide explicite fait foi.
 - Fermer la fenêtre **réduit** l'application dans la zone de notification
   (`close_to_tray`) ; un vrai arrêt se fait par « Quitter » (menu Fichier ou
   icône). Toute nouvelle voie de sortie doit passer par `MainWindow.quit_app`

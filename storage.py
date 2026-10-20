@@ -76,23 +76,42 @@ LEGACY_PERSONAL_UNIT = "Collection perso"
 
 # --- Numéro de demande ------------------------------------------------------
 # Un numéro de demande est une suite **ininterrompue** de lettres/chiffres,
-# d'au moins 10 caractères, sans ponctuation. On impose au moins un chiffre
-# pour éviter de prendre un mot de 10 lettres (RADIOLOGIE, COMPTERENDU…).
+# d'au moins 10 caractères, sans ponctuation. Il commence toujours par L, R ou
+# E et contient au moins 8 chiffres (pour ne pas confondre avec un nom de
+# famille). L'OCR remplace souvent le L initial par un 1 : on corrige ce seul
+# caractère, sans tenter de corriger les autres confusions de l'OCR.
 REQUEST_NUMBER_MIN_LENGTH = 10
-_REQUEST_NUMBER_RE = re.compile(
-    rf"(?<![A-Za-z0-9])(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{{{REQUEST_NUMBER_MIN_LENGTH},}}(?![A-Za-z0-9])"
+REQUEST_NUMBER_MIN_DIGITS = 8
+REQUEST_NUMBER_PREFIXES = ("L", "R", "E")
+_REQUEST_NUMBER_CANDIDATE_RE = re.compile(
+    rf"(?<![A-Za-z0-9])[A-Za-z0-9]{{{REQUEST_NUMBER_MIN_LENGTH},}}(?![A-Za-z0-9])"
 )
 
 
 def extract_request_number(text: str) -> str:
-    """Retourne le **premier** numéro de demande trouvé dans ``text``.
+    """Retourne le **premier** numéro de demande valide trouvé dans ``text``.
 
-    Règle : 10 caractères alphanumériques consécutifs minimum, au moins un
-    chiffre, sans ponctuation à l'intérieur. Le premier trouvé dans l'ordre du
-    texte OCR est retenu ; aucun autre candidat n'est examiné.
+    Règle : au moins 10 caractères alphanumériques consécutifs, sans
+    ponctuation, commençant par L, R ou E (ou par ``1``, alors remplacé par
+    ``L``), avec au moins 8 chiffres. Les candidats invalides (noms de famille,
+    mots longs…) sont ignorés ; on retient le premier candidat valide dans
+    l'ordre du texte OCR.
     """
-    match = _REQUEST_NUMBER_RE.search(text or "")
-    return match.group(0) if match else ""
+    for match in _REQUEST_NUMBER_CANDIDATE_RE.finditer(text or ""):
+        candidate = match.group(0)
+        first = candidate[0]
+        if first == "1":
+            # Confusion OCR classique : 1 initial au lieu de L.
+            candidate = "L" + candidate[1:]
+        elif first.upper() in REQUEST_NUMBER_PREFIXES:
+            # Normalise uniquement la casse de la première lettre.
+            candidate = first.upper() + candidate[1:]
+        else:
+            continue
+        if sum(ch.isdigit() for ch in candidate) < REQUEST_NUMBER_MIN_DIGITS:
+            continue
+        return candidate
+    return ""
 
 
 def _normalize_visibility(value: Any) -> str:

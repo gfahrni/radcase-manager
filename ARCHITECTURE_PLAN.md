@@ -202,7 +202,7 @@ fenêtre affichée.
 
 | Module | Rôle |
 |---|---|
-| `config.py` | réglages locaux (`settings.json`), chemins |
+| `config.py` | réglages locaux (`settings.json`), chemins ; dossier partagé par défaut `N:/RAD/COMMUN/radcase-manager/DATABASE-RAD-CHUV` |
 | `bootstrap.py` | crée `cases/`, `units.json`, `users.json`, `README.md` si absents |
 | `storage.py` | `create_case()`, `list_cases()`, `search_cases()` + index local |
 | `ocr.py` | OCR natif Windows (`Windows.Media.Ocr`) dans un thread dédié, best-effort |
@@ -228,10 +228,11 @@ par **`Windows.Media.Ocr`** (paquets `winrt-*`), sans modèle ni appel réseau.
 - **Stockage** : `ocr_text` / `ocr_status` dans le frontmatter YAML, colonnes
   correspondantes dans l'index local (schéma v4). La recherche OCR est
   optionnelle (`search_cases(..., include_ocr=True)`), désactivée par défaut.
-- **Numéro de demande** : déduit du texte OCR (premier groupe d'au moins 10
-  lettres/chiffres consécutifs, avec au moins un chiffre), stocké dans
-  `request_number`, indexé, affiché dans le plein écran et la Recherche Avancée,
-  exporté dans une colonne dédiée et corrigeable dans l'onglet Édition.
+- **Numéro de demande** : déduit du texte OCR (au moins 10 lettres/chiffres
+  consécutifs, préfixe `L`/`R`/`E`, au moins 8 chiffres, `1` initial corrigé en
+  `L`), stocké dans `request_number`, indexé, affiché dans le plein écran et la
+  Recherche Avancée, exporté dans une colonne dédiée et corrigeable dans
+  l'onglet Édition.
 - **Anciens cas** : pas d'OCR rétroactif en v5.1 ; un cas v5.0 sans
   `request_number` le déduit à la lecture de son `ocr_text`, puis l'écrit au
   prochain enregistrement.
