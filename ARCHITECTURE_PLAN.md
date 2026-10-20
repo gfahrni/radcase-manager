@@ -226,10 +226,15 @@ par **`Windows.Media.Ocr`** (paquets `winrt-*`), sans modèle ni appel réseau.
 - **Robustesse** : statuts `ok` / `empty` / `unsupported` / `failed` /
   `timeout`, délai de garde de 15 s. Aucun échec OCR ne bloque l'enregistrement.
 - **Stockage** : `ocr_text` / `ocr_status` dans le frontmatter YAML, colonnes
-  correspondantes dans l'index local (schéma v3). La recherche OCR est
+  correspondantes dans l'index local (schéma v4). La recherche OCR est
   optionnelle (`search_cases(..., include_ocr=True)`), désactivée par défaut.
-- **Anciens cas** : pas d'OCR rétroactif en v5.0 ; il pourra être ajouté par une
-  action de rattrapage qui réécrit `case.md` de façon atomique.
+- **Numéro de demande** : déduit du texte OCR (premier groupe d'au moins 10
+  lettres/chiffres consécutifs, avec au moins un chiffre), stocké dans
+  `request_number`, indexé, affiché dans le plein écran et la Recherche Avancée,
+  exporté dans une colonne dédiée et corrigeable dans l'onglet Édition.
+- **Anciens cas** : pas d'OCR rétroactif en v5.1 ; un cas v5.0 sans
+  `request_number` le déduit à la lecture de son `ocr_text`, puis l'écrit au
+  prochain enregistrement.
 
 ## 🪟 Mode « barre d'état système » (zone de notification)
 

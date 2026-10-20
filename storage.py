@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import threading
@@ -73,6 +74,26 @@ VISIBILITY_VALUES = (VISIBILITY_PUBLIC, VISIBILITY_PRIVATE)
 # pour la nettoyer à la lecture des cas historiques.
 LEGACY_PERSONAL_UNIT = "Collection perso"
 
+# --- Numéro de demande ------------------------------------------------------
+# Un numéro de demande est une suite **ininterrompue** de lettres/chiffres,
+# d'au moins 10 caractères, sans ponctuation. On impose au moins un chiffre
+# pour éviter de prendre un mot de 10 lettres (RADIOLOGIE, COMPTERENDU…).
+REQUEST_NUMBER_MIN_LENGTH = 10
+_REQUEST_NUMBER_RE = re.compile(
+    rf"(?<![A-Za-z0-9])(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{{{REQUEST_NUMBER_MIN_LENGTH},}}(?![A-Za-z0-9])"
+)
+
+
+def extract_request_number(text: str) -> str:
+    """Retourne le **premier** numéro de demande trouvé dans ``text``.
+
+    Règle : 10 caractères alphanumériques consécutifs minimum, au moins un
+    chiffre, sans ponctuation à l'intérieur. Le premier trouvé dans l'ordre du
+    texte OCR est retenu ; aucun autre candidat n'est examiné.
+    """
+    match = _REQUEST_NUMBER_RE.search(text or "")
+    return match.group(0) if match else ""
+
 
 def _normalize_visibility(value: Any) -> str:
     """Ramène toute valeur à ``public`` ou ``private`` (défaut : ``public``)."""
@@ -110,6 +131,8 @@ class Case:
     ocr_text: str = ""
     #: Statut de la dernière tentative OCR (``ok``, ``empty``, ``failed``…).
     ocr_status: str = ""
+    #: Numéro de demande extrait de l'OCR (ou saisi manuellement).
+    request_number: str = ""
 
     @property
     def image_path(self) -> Optional[Path]:
@@ -189,6 +212,14 @@ def _parse_case_md(path: Path) -> Optional[Case]:
     # Nettoyage des cas historiques : l'ancienne pseudo-unité personnelle
     # disparaît du vocabulaire (les anciens cas deviennent publics).
     units = [u for u in (meta.get("units") or []) if u and u != LEGACY_PERSONAL_UNIT]
+    ocr_text = str(meta.get("ocr_text") or "")
+    # Les cas v5.0 n'ont pas encore de champ ``request_number`` : on le déduit
+    # de leur texte OCR sans réécrire le fichier. S'il est présent, même vide,
+    # il fait foi (permet d'effacer un faux positif sans qu'il réapparaisse).
+    if "request_number" in meta:
+        request_number = str(meta.get("request_number") or "").strip()
+    else:
+        request_number = extract_request_number(ocr_text)
     return Case(
         id=str(meta.get("id", path.parent.name)),
         title=str(meta.get("title", "")),
@@ -201,8 +232,9 @@ def _parse_case_md(path: Path) -> Optional[Case]:
         date_modified=str(meta["date_modified"]) if meta.get("date_modified") else None,
         case_type=str(meta.get("case_type") or "Standard"),
         visibility=_normalize_visibility(meta.get("visibility")),
-        ocr_text=str(meta.get("ocr_text") or ""),
+        ocr_text=ocr_text,
         ocr_status=str(meta.get("ocr_status") or ""),
+        request_number=request_number,
     )
 
 
@@ -328,6 +360,7 @@ def create_case(
     case_type: str = "Standard",
     visibility: str = VISIBILITY_PUBLIC,
     ocr: bool = False,
+    request_number: Optional[str] = None,
 ) -> Case:
     """Crée un cas de façon atomique et retourne l'objet :class:`Case`.
 
@@ -339,6 +372,8 @@ def create_case(
     n'apparaît dans la recherche que pour son auteur.
     ``ocr=True`` lit le texte de l'image (Windows uniquement) **avant** le
     renommage atomique ; un échec OCR n'empêche jamais l'enregistrement.
+    ``request_number`` est déduit du texte OCR s'il n'est pas fourni ; une
+    valeur explicite (même vide) fait foi.
     Lève ``ValueError`` si le titre est vide ou le dossier partagé manquant.
     """
     title = (title or "").strip()
@@ -369,6 +404,10 @@ def create_case(
             image_name = _save_image(image, tmp_dir)
 
         ocr_text, ocr_status = _run_ocr(ocr, tmp_dir, image_name)
+        if request_number is None:
+            request_number = extract_request_number(ocr_text)
+        else:
+            request_number = request_number.strip()
 
         meta = {
             "id": case_id,
@@ -379,6 +418,9 @@ def create_case(
             "image": image_name,
             "case_type": case_type or "Standard",
             "visibility": _normalize_visibility(visibility),
+            # Toujours écrit, même vide : permet de distinguer un cas ancien
+            # (champ absent → déduction OCR) d'un faux positif effacé à la main.
+            "request_number": request_number,
         }
         if ocr_text:
             meta["ocr_text"] = ocr_text
@@ -405,6 +447,7 @@ def create_case(
         visibility=meta["visibility"],
         ocr_text=ocr_text,
         ocr_status=ocr_status,
+        request_number=request_number,
     )
     _index_touch_case(result, shared_path)
     return result
@@ -425,6 +468,7 @@ def update_case(
     case_type: str = "Standard",
     visibility: Optional[str] = None,
     ocr: bool = False,
+    request_number: Optional[str] = None,
 ) -> Case:
     """Met à jour un cas existant en réécrivant son dossier « à sa place ».
 
@@ -437,6 +481,8 @@ def update_case(
     - ``visibility`` : ``None`` (défaut) conserve la visibilité du cas.
     - ``ocr=True`` relit le texte si l'image est remplacée, ou complète un
       ancien cas qui n'avait pas encore de texte OCR.
+    - ``request_number`` : ``None`` (défaut) conserve/déduit automatiquement ;
+      une chaîne, même vide, est une correction manuelle qui fait foi.
     - Écriture atomique par fichier (dossier temporaire puis renommage).
     """
     title = (title or "").strip()
@@ -456,6 +502,7 @@ def update_case(
         # 1) Image : conserver, retirer, ou remplacer.
         image_name: Optional[str] = None
         ocr_text, ocr_status = "", ""
+        old_ocr_text = case.ocr_text
         if image is KEEP_IMAGE:
             if case.image and (final_dir / case.image).exists():
                 shutil.copy2(final_dir / case.image, tmp_dir / case.image)
@@ -466,14 +513,33 @@ def update_case(
                 ocr_status = case.ocr_status
                 if ocr and not ocr_text and ocr_status in ("", ocr_backend.STATUS_SKIPPED):
                     ocr_text, ocr_status = _run_ocr(True, tmp_dir, image_name)
-            elif ocr:
-                ocr_status = ocr_backend.STATUS_SKIPPED
+                if request_number is None:
+                    if case.request_number:
+                        # Valeur déjà stockée (ou déduite à la lecture).
+                        request_number = case.request_number
+                    elif not old_ocr_text and ocr_text:
+                        # OCR rattrapé à l'instant : on en profite.
+                        request_number = extract_request_number(ocr_text)
+                    else:
+                        request_number = ""
+                else:
+                    request_number = request_number.strip()
+            else:
+                request_number = ""
+                if ocr:
+                    ocr_status = ocr_backend.STATUS_SKIPPED
         elif image is not None:
             image_name = _save_image(image, tmp_dir)
             ocr_text, ocr_status = _run_ocr(ocr, tmp_dir, image_name)
-        elif ocr:
-            # Image retirée : l'ancien texte OCR n'a plus de sens.
-            ocr_status = ocr_backend.STATUS_SKIPPED
+            if request_number is None:
+                request_number = extract_request_number(ocr_text)
+            else:
+                request_number = request_number.strip()
+        else:
+            # Image retirée : l'ancien numéro n'a plus de sens.
+            request_number = ""
+            if ocr:
+                ocr_status = ocr_backend.STATUS_SKIPPED
 
         # 2) case.md : on conserve id + date_added, on ajoute date_modified.
         modified = datetime.now().isoformat(timespec="seconds")
@@ -490,6 +556,8 @@ def update_case(
             "image": image_name,
             "case_type": case_type or "Standard",
             "visibility": visibility,
+            # Toujours écrit : une valeur vide est un effacement explicite.
+            "request_number": request_number,
         }
         if ocr_text:
             meta["ocr_text"] = ocr_text
@@ -520,6 +588,7 @@ def update_case(
         visibility=meta["visibility"],
         ocr_text=ocr_text,
         ocr_status=ocr_status,
+        request_number=request_number,
     )
     _index_touch_case(result, Path(shared_root))
     return result
@@ -557,7 +626,7 @@ def delete_case(case: "Case") -> bool:
 
 # --- Index local (cache reconstructible) -------------------------------------
 
-INDEX_SCHEMA_VERSION = "3"
+INDEX_SCHEMA_VERSION = "4"
 
 #: Un scan complet de l'arbre ne sert qu'une fois par rafale d'appels : un même
 #: passage d'onglet déclenche plusieurs lectures successives (fil, badge,
@@ -595,7 +664,8 @@ def _index_connect() -> sqlite3.Connection:
             size          INTEGER,
             visibility    TEXT,
             ocr_text      TEXT,
-            ocr_status    TEXT
+            ocr_status    TEXT,
+            request_number TEXT
         )"""
     )
     conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
@@ -611,6 +681,8 @@ def _index_connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE cases_index ADD COLUMN ocr_text TEXT")
     if "ocr_status" not in columns:
         conn.execute("ALTER TABLE cases_index ADD COLUMN ocr_status TEXT")
+    if "request_number" not in columns:
+        conn.execute("ALTER TABLE cases_index ADD COLUMN request_number TEXT")
     return conn
 
 
@@ -630,7 +702,7 @@ def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
 def _row_to_case(row: tuple, root: Path) -> Case:
     (case_id, title, date_added, date_modified, case_type, author, units, image,
      description, rel_path, _mtime, _size, visibility, ocr_text,
-     ocr_status) = row
+     ocr_status, request_number) = row
     return Case(
         id=case_id,
         title=title or "",
@@ -645,24 +717,27 @@ def _row_to_case(row: tuple, root: Path) -> Case:
         visibility=_normalize_visibility(visibility),
         ocr_text=ocr_text or "",
         ocr_status=ocr_status or "",
+        request_number=request_number or "",
     )
 
 
 def _index_upsert(conn: sqlite3.Connection, case: Case, rel_path: str, mtime: float, size: int) -> None:
     conn.execute(
         """INSERT INTO cases_index
-             (id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility, ocr_text, ocr_status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             (id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility, ocr_text, ocr_status, request_number)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              title=excluded.title, date_added=excluded.date_added, date_modified=excluded.date_modified,
              case_type=excluded.case_type, author=excluded.author, units=excluded.units,
              image=excluded.image, description=excluded.description, rel_path=excluded.rel_path,
              mtime=excluded.mtime, size=excluded.size, visibility=excluded.visibility,
-             ocr_text=excluded.ocr_text, ocr_status=excluded.ocr_status""",
+             ocr_text=excluded.ocr_text, ocr_status=excluded.ocr_status,
+             request_number=excluded.request_number""",
         (
             case.id, case.title, case.date_added, case.date_modified, case.case_type, case.author,
             json.dumps(case.units, ensure_ascii=False), case.image, case.description,
             rel_path, mtime, size, case.visibility, case.ocr_text, case.ocr_status,
+            case.request_number,
         ),
     )
 
@@ -810,7 +885,7 @@ def _index_remove(case_id: str) -> None:
 # --- Lecture / recherche -----------------------------------------------------
 
 
-_SELECT_COLS = "id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility, ocr_text, ocr_status"
+_SELECT_COLS = "id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility, ocr_text, ocr_status, request_number"
 
 
 def list_cases(shared_root: str | Path, viewer: str = "") -> List[Case]:
@@ -850,7 +925,8 @@ def search_cases(
     """Recherche multi-critères, exécutée sur l'index local.
 
     Les filtres auteur, texte et unités sont appliqués côté Python (via
-    ``casefold``, correct pour les accents), la plage de dates via SQL.
+    ``casefold``, correct pour les accents), la plage de dates via SQL. Le
+    texte libre couvre le titre, la description et le numéro de demande.
 
     ``viewer`` est le nom de l'utilisateur courant : les cas privés ne sont
     retournés que s'il en est l'auteur (sinon ils restent cachés).
@@ -905,7 +981,7 @@ def search_cases(
             if not ok:
                 continue
         if text_l:
-            haystack = f"{case.title}\n{case.description}"
+            haystack = f"{case.title}\n{case.description}\n{case.request_number}"
             if include_ocr:
                 haystack += "\n" + case.ocr_text
             if text_l not in haystack.casefold():

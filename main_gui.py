@@ -499,11 +499,31 @@ class FeedCard(QFrame):
         self.clicked.emit()
 
 
+class SelectableLabel(QLabel):
+    """Texte sélectionnable dont le clic ne ferme pas le plein écran.
+
+    Sans ``event.accept()``, le clic remonterait au conteneur et déclencherait
+    le ``eventFilter`` de :class:`DetailOverlay` (fermeture).
+    """
+
+    def __init__(self, parent: QWidget = None):
+        super().__init__(parent)
+        self.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+        self.setCursor(Qt.IBeamCursor)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        super().mousePressEvent(event)
+        event.accept()
+
+
 class DetailOverlay(QWidget):
     """Superposition plein fenêtre : image zoomée + titre, description et métadonnées.
 
     Ouverte au clic sur une image (Recherche Avancée, Bibliothèque, Fil). Le
-    contenu défile si nécessaire ; fermeture par un clic n'importe où ou Échap.
+    contenu défile si nécessaire ; un clic sur l'image ou le fond ferme, un clic
+    dans le texte sélectionne sans fermer. Échap ferme toujours.
     """
 
     def __init__(self, parent: QWidget):
@@ -536,23 +556,30 @@ class DetailOverlay(QWidget):
         self.image.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.vbox.addWidget(self.image, 0, Qt.AlignHCenter)
 
-        self.title = QLabel()
+        # Panneau de texte : tout clic dans cette zone (y compris entre les
+        # libellés) est consommé et ne ferme pas le plein écran.
+        self.text_panel = QWidget()
+        self.text_panel.installEventFilter(self)
+        self.text_layout = QVBoxLayout(self.text_panel)
+        self.text_layout.setContentsMargins(0, 0, 0, 0)
+        self.text_layout.setSpacing(12)
+
+        self.title = SelectableLabel()
         self.title.setWordWrap(True)
-        self.title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.title.setStyleSheet("color:#fff; font-size:18px; font-weight:bold;")
-        self.vbox.addWidget(self.title, 0, Qt.AlignHCenter)
+        self.text_layout.addWidget(self.title, 0, Qt.AlignHCenter)
 
-        self.description = QLabel()
+        self.description = SelectableLabel()
         self.description.setWordWrap(True)
-        self.description.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.description.setStyleSheet("color:#ddd; font-size:14px;")
-        self.vbox.addWidget(self.description, 0, Qt.AlignHCenter)
+        self.text_layout.addWidget(self.description, 0, Qt.AlignHCenter)
 
-        self.meta = QLabel()
+        self.meta = SelectableLabel()
         self.meta.setWordWrap(True)
-        self.meta.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.meta.setStyleSheet("color:#888; font-size:11px;")
-        self.vbox.addWidget(self.meta, 0, Qt.AlignHCenter)
+        self.text_layout.addWidget(self.meta, 0, Qt.AlignHCenter)
+
+        self.vbox.addWidget(self.text_panel, 0, Qt.AlignHCenter)
 
         self.scroll.setWidget(self.container)
         outer.addWidget(self.scroll)
@@ -567,7 +594,10 @@ class DetailOverlay(QWidget):
             pixmap = QPixmap(str(case.image_path)) if case.image_path else QPixmap()
         self._source = None if pixmap is None or pixmap.isNull() else pixmap
 
-        self.title.setText(case.title)
+        title = (case.title or "").strip()
+        if case.request_number:
+            title = f"{title} ({case.request_number})"
+        self.title.setText(title)
         description = (case.description or "").strip()
         self.description.setText(description)
         self.description.setVisible(bool(description))
@@ -597,6 +627,7 @@ class DetailOverlay(QWidget):
         text_width = max(280, min(1000, int(self.width() * 0.9), inner_width))
         for label in (self.title, self.description, self.meta):
             label.setFixedWidth(text_width)
+        self.text_panel.setFixedWidth(text_width)
 
         if self._source is None:
             self.image.clear()
@@ -609,9 +640,10 @@ class DetailOverlay(QWidget):
             labels.append(self.description)
         labels.append(self.meta)
         text_height = sum(self._text_height(label, text_width) for label in labels)
+        text_height += self.text_layout.spacing() * max(0, len(labels) - 1)
 
         spacing = self.vbox.spacing()
-        gaps = spacing * len(labels)  # espaces entre image et blocs de texte
+        gaps = spacing  # espace entre l'image et le panneau de texte
         available = self.height() - margins.top() - margins.bottom() - text_height - gaps
 
         max_w = max(200, inner_width)
@@ -657,6 +689,8 @@ class DetailOverlay(QWidget):
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 (nom imposé par Qt)
         if event.type() == QEvent.MouseButtonPress:
+            if obj is getattr(self, "text_panel", None):
+                return True  # zone de texte : ne pas fermer
             self.hide()
             return True
         if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
@@ -2433,6 +2467,18 @@ class MainWindow(QMainWindow):
         self.edit_title_input = QLineEdit()
         self.edit_title_input.returnPressed.connect(self.save_edit)
         details_form.addRow("Titre (obligatoire) :", self.edit_title_input)
+
+        # Numéro de demande : prérempli avec la valeur OCR (ou une correction
+        # précédente). Laisser vide et ne pas y toucher conserve/déduit la
+        # valeur ; une saisie explicite, même vide, fait foi.
+        self.edit_request_input = QLineEdit()
+        self.edit_request_input.setPlaceholderText(
+            "Détecté automatiquement après OCR (modifiable)"
+        )
+        self.edit_request_input.textEdited.connect(self._on_edit_request_edited)
+        self._edit_request_edited = False
+        details_form.addRow("N° de demande :", self.edit_request_input)
+
         self.edit_description_input = CaseTextEdit()
         self.edit_description_input.submitted.connect(self.save_edit)
         self.edit_description_input.setFixedHeight(120)
@@ -2467,6 +2513,8 @@ class MainWindow(QMainWindow):
 
     def _fill_edit_form(self, case: storage.Case) -> None:
         self.edit_title_input.setText(case.title)
+        self.edit_request_input.setText(case.request_number)
+        self._edit_request_edited = False
         self.edit_description_input.setPlainText(case.description)
         self._reload_edit_units(case.units)
         self._set_edit_case_type(case.case_type)
@@ -2474,6 +2522,10 @@ class MainWindow(QMainWindow):
         self.edit_image_source = case.image_path if case.image else None
         self.edit_image_changed = False
         self._edit_update_preview()
+
+    def _on_edit_request_edited(self, _text: str) -> None:
+        """Mémorise qu'une correction manuelle du numéro a été saisie."""
+        self._edit_request_edited = True
 
     def _set_edit_case_type(self, name: str) -> None:
         radio = self.edit_case_type_buttons.get(name) or self.edit_case_type_buttons.get(bootstrap.DEFAULT_CASE_TYPE)
@@ -2539,11 +2591,17 @@ class MainWindow(QMainWindow):
             return
         self.edit_image_source = image
         self.edit_image_changed = True
+        # Le numéro de l'ancienne image n'est plus valable : on repart de l'OCR
+        # de la nouvelle, sauf si l'utilisateur en saisit un juste après.
+        self.edit_request_input.clear()
+        self._edit_request_edited = False
         self._edit_update_preview()
 
     def edit_clear_image(self) -> None:
         self.edit_image_source = None
         self.edit_image_changed = True
+        self.edit_request_input.clear()
+        self._edit_request_edited = False
         self._edit_update_preview()
 
     def selected_edit_units(self) -> list[str]:
@@ -2604,6 +2662,11 @@ class MainWindow(QMainWindow):
             case_type=case_type,
             visibility=visibility,
             ocr=getattr(self.settings, "ocr_enabled", True) and ocr.is_supported(),
+            request_number=(
+                self.edit_request_input.text().strip()
+                if self._edit_request_edited
+                else None
+            ),
         )
         self._start_save(UpdateCaseWorker(payload), kind="edit")
 
@@ -2714,7 +2777,9 @@ class MainWindow(QMainWindow):
             return box
 
         self.search_text = QLineEdit()
-        self.search_text.setPlaceholderText("Texte dans le titre / description")
+        self.search_text.setPlaceholderText(
+            "Texte dans le titre / description / n° de demande"
+        )
         self.search_text.returnPressed.connect(self.run_search)
 
         self.search_author = QLineEdit()
@@ -3065,6 +3130,8 @@ class MainWindow(QMainWindow):
         emoji_map = {u["name"]: u.get("emoji", "") for u in bootstrap.load_units(self.settings.shared_root)}
         for case in cases:
             label = f"{case.title} – {case.date_added}  ({case.author})"
+            if case.request_number:
+                label += f"  ·  N° {case.request_number}"
             if case.visibility == storage.VISIBILITY_PRIVATE:
                 label = "👤 " + label
             type_txt = (
@@ -3115,8 +3182,9 @@ class MainWindow(QMainWindow):
         if not path.lower().endswith(".csv"):
             path += ".csv"
 
-        header = ["Titre", "Type", "Visibilité", "Date d'ajout", "Date de modification",
-                  "Auteur", "Unités", "Image", "Dossier", "Description"]
+        header = ["Titre", "N° de demande", "Type", "Visibilité", "Date d'ajout",
+                  "Date de modification", "Auteur", "Unités", "Image", "Dossier",
+                  "Description"]
         try:
             # utf-8-sig : accents corrects dans Excel ; ';' : séparateur Excel FR.
             with open(path, "w", newline="", encoding="utf-8-sig") as handle:
@@ -3125,6 +3193,7 @@ class MainWindow(QMainWindow):
                 for case in cases:
                     writer.writerow([
                         case.title,
+                        case.request_number,
                         case.case_type,
                         "Privé" if case.visibility == storage.VISIBILITY_PRIVATE else "Public",
                         case.date_added,
@@ -3152,7 +3221,10 @@ class MainWindow(QMainWindow):
             return
         self._selected_case = case
         description = case.description.strip()
-        self.detail.setPlainText(f"{case.title}\n\n{description}" if description else case.title)
+        title = case.title
+        if case.request_number:
+            title = f"{title} ({case.request_number})"
+        self.detail.setPlainText(f"{title}\n\n{description}" if description else title)
         self.case_image.set_source(case.image_path)
 
     def show_results_context_menu(self, pos) -> None:

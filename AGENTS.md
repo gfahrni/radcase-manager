@@ -11,11 +11,13 @@ presse-papiers, dans un **dossier réseau partagé**.
   l'enregistrement, qualité `storage.IMAGE_QUALITY` ; les cas historiques
   peuvent contenir un `image.png`).
 - `case.md` = frontmatter **YAML** (id, title, date_added, date_modified, case_type,
-  visibility, author, units, image, et si disponible `ocr_text` / `ocr_status`)
-  suivi de la description en markdown.
+  visibility, author, units, image, `request_number`, et si disponible
+  `ocr_text` / `ocr_status`) suivi de la description en markdown.
   `visibility` = `public` (défaut) ou `private` (masqué de la recherche des autres).
   Le texte OCR (IPP, annotations…) est écrit **avant** le renommage atomique : un
-  cas visible est toujours complet.
+  cas visible est toujours complet. Le **numéro de demande** est déduit de ce
+  texte (premier groupe d'au moins 10 lettres/chiffres consécutifs, avec au moins
+  un chiffre) et peut être corrigé dans l'onglet Édition.
 - **Pas de SQLite** (choix délibéré) : les cas sont **figés** (append-only), donc
   écriture dans un dossier temporaire `.tmp_<id>` puis `os.rename` **atomique**.
 - Réglages locaux **par utilisateur système** dans `settings_data/settings.json`,
@@ -108,6 +110,10 @@ presse-papiers, dans un **dossier réseau partagé**.
   `case.md` et dans l'index local ; `search_cases(..., include_ocr=True)` permet
   de l'inclure dans la recherche, désactivé par défaut. Aucun OCR dans l'export
   des résultats. Les anciens cas restent sans texte jusqu'à un rattrapage.
+- Numéro de demande : `request_number` dans `case.md` et l'index. Affiché à
+  droite du titre dans le plein écran et dans la Recherche Avancée ; colonne
+  **« N° de demande »** dans l'export CSV/Excel. Le champ est prérempli et
+  modifiable dans l'onglet Édition ; une valeur vide explicite fait foi.
 - Fermer la fenêtre **réduit** l'application dans la zone de notification
   (`close_to_tray`) ; un vrai arrêt se fait par « Quitter » (menu Fichier ou
   icône). Toute nouvelle voie de sortie doit passer par `MainWindow.quit_app`
