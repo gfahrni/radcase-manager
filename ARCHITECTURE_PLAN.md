@@ -205,11 +205,31 @@ fenêtre affichée.
 | `config.py` | réglages locaux (`settings.json`), chemins |
 | `bootstrap.py` | crée `cases/`, `units.json`, `users.json`, `README.md` si absents |
 | `storage.py` | `create_case()`, `list_cases()`, `search_cases()` + index local |
+| `ocr.py` | OCR natif Windows (`Windows.Media.Ocr`) dans un thread dédié, best-effort |
 | `thumbnails.py` | cache local des vignettes d'affichage (dérivées, reconstructible) |
 | `tray.py` | zone de notification (icône + menu) et verrou mono-instance |
 | `updater.py` | mise à jour automatique depuis les releases GitHub (stdlib seule) |
 | `version.py` | version de l'application, inscrite par la CI au build |
 | `main_gui.py` | interface PySide6 (saisie + consultation) |
+
+## 🔍 OCR des images
+
+Le texte de l'image (IPP, annotations, comptes rendus) est lu à l'enregistrement
+par **`Windows.Media.Ocr`** (paquets `winrt-*`), sans modèle ni appel réseau.
+
+- **Atomicité** : l'OCR est exécuté dans `storage.create_case()` /
+  `update_case()`, après l'écriture de l'image et **avant** `case.md` et le
+  renommage. Un cas visible est donc toujours complet.
+- **Interface** : la création/l'édition complète tourne dans un `QThread` ; un
+  `QThread` par enregistrement, mais un **thread OCR unique et persistant**
+  (WinRT fige le mode d'appartement du premier thread).
+- **Robustesse** : statuts `ok` / `empty` / `unsupported` / `failed` /
+  `timeout`, délai de garde de 15 s. Aucun échec OCR ne bloque l'enregistrement.
+- **Stockage** : `ocr_text` / `ocr_status` dans le frontmatter YAML, colonnes
+  correspondantes dans l'index local (schéma v3). La recherche OCR est
+  optionnelle (`search_cases(..., include_ocr=True)`), désactivée par défaut.
+- **Anciens cas** : pas d'OCR rétroactif en v5.0 ; il pourra être ajouté par une
+  action de rattrapage qui réécrit `case.md` de façon atomique.
 
 ## 🪟 Mode « barre d'état système » (zone de notification)
 

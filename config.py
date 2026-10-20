@@ -128,6 +128,9 @@ DEFAULT_SETTINGS = {
     #: elle se lance alors **réduite** dans la zone de notification, sans que le
     #: radiologue ait à y penser après un redémarrage. Voir ``autostart.py``.
     "start_with_windows": True,
+    #: Lire le texte des images à l'enregistrement avec l'OCR natif Windows
+    #: (voir ``ocr.py``). Le texte est stocké dans le cas et indexé localement.
+    "ocr_enabled": True,
 }
 
 
@@ -160,6 +163,8 @@ class Settings:
     #: Lancement automatique à l'ouverture de session Windows (réduit dans la
     #: zone de notification). Reflété dans le registre par ``autostart.sync``.
     start_with_windows: bool = True
+    #: Lecture OCR native Windows du texte des images à l'enregistrement.
+    ocr_enabled: bool = True
 
     @property
     def is_configured(self) -> bool:
@@ -187,6 +192,8 @@ def load_settings() -> Settings:
         settings.close_to_tray = True
     if not isinstance(settings.start_with_windows, bool):
         settings.start_with_windows = True
+    if not isinstance(settings.ocr_enabled, bool):
+        settings.ocr_enabled = True
     for name in ("last_update_check", "available_update", "update_snooze_until",
                  "update_snooze_version"):
         if not isinstance(getattr(settings, name), str):

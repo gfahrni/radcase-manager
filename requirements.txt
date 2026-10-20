@@ -1,6 +1,21 @@
-PySide6>=6.6
+# « Essentials » et non le métapaquet « PySide6 » : ce dernier tire aussi les
+# Addons (WebEngine/Chromium, Pdf, Qml/Quick, Qt3D, Charts…), jamais utilisés ici
+# (voir la liste EXCLUDES de RadCaseManager.spec). Installation ~350 Mo au lieu
+# de ~1,3 Go. L'application n'utilise que QtCore / QtGui / QtWidgets / QtNetwork.
+PySide6-Essentials>=6.6
 PyYAML>=6.0
 Send2Trash>=1.8
 # Pillow n'est plus nécessaire pour la capture (le presse-papiers est lu via Qt).
 # Décommenter uniquement si un traitement d'image est ajouté.
 # Pillow>=10.0
+
+# OCR natif Windows (Windows.Media.Ocr). Paquets modulaires PyWinRT : quelques
+# Mo installés, aucun modèle à embarquer, tout est hors ligne. Le marqueur
+# d'environnement évite toute installation sur macOS/Linux (développement).
+winrt-runtime>=3.2.1,<4; sys_platform == "win32"
+winrt-Windows.Media.Ocr>=3.2.1,<4; sys_platform == "win32"
+winrt-Windows.Graphics.Imaging>=3.2.1,<4; sys_platform == "win32"
+winrt-Windows.Globalization>=3.2.1,<4; sys_platform == "win32"
+winrt-Windows.Foundation>=3.2.1,<4; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=3.2.1,<4; sys_platform == "win32"
+winrt-Windows.Storage.Streams>=3.2.1,<4; sys_platform == "win32"

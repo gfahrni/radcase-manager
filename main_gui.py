@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 import autostart
 import bootstrap
 import config
+import ocr
 import storage
 import thumbnails
 import tray
@@ -137,6 +138,49 @@ class UpdateDownloadWorker(QObject):
         self.finished.emit()
 
 
+# --------------------------------------------------------------------------- #
+# Enregistrement : tâches de fond
+# --------------------------------------------------------------------------- #
+class SaveCaseWorker(QObject):
+    """Crée un cas (image + OCR éventuel) sans bloquer l'interface."""
+
+    #: Cas créé (``storage.Case``).
+    finished = Signal(object)
+    #: Message d'erreur remonté à l'utilisateur.
+    failed = Signal(str)
+
+    def __init__(self, payload: dict):
+        super().__init__()
+        self._payload = payload
+
+    def run(self) -> None:
+        try:
+            case = storage.create_case(**self._payload)
+        except Exception as exc:  # noqa: BLE001 - remonté à l'interface
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(case)
+
+
+class UpdateCaseWorker(QObject):
+    """Met à jour un cas existant sans bloquer l'interface."""
+
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, payload: dict):
+        super().__init__()
+        self._payload = payload
+
+    def run(self) -> None:
+        try:
+            case = storage.update_case(**self._payload)
+        except Exception as exc:  # noqa: BLE001 - remonté à l'interface
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(case)
+
+
 class ClickableLabel(QLabel):
     """Étiquette cliquable — utilisée par l'indicateur de mise à jour."""
 
@@ -196,6 +240,22 @@ class SettingsDialog(QDialog):
             bool(getattr(settings, "auto_check_updates", True))
         )
         form.addRow("Mises à jour :", self.auto_update_checkbox)
+
+        # OCR natif Windows : lecture du texte de l'image au moment de
+        # l'enregistrement, dans un thread dédié (voir ``ocr.py``). La case
+        # n'apparaît que sur une plateforme capable de l'exécuter.
+        self.ocr_checkbox = None
+        if ocr.is_supported():
+            self.ocr_checkbox = QCheckBox(
+                "Lire le texte des images (OCR Windows) à l'enregistrement"
+            )
+            self.ocr_checkbox.setChecked(bool(getattr(settings, "ocr_enabled", True)))
+            self.ocr_checkbox.setToolTip(
+                "Le texte détecté (IPP, annotations…) est stocké dans le cas et "
+                "indexé localement. La lecture se fait en tâche de fond, sans "
+                "bloquer l'interface."
+            )
+            form.addRow("OCR :", self.ocr_checkbox)
 
         # Fermeture de la fenêtre : réduction dans la zone de notification, ou
         # arrêt. L'arrêt réel se fait toujours par « Quitter » (menu Fichier ou
@@ -293,6 +353,11 @@ class SettingsDialog(QDialog):
                 self.autostart_checkbox.isChecked()
                 if self.autostart_checkbox is not None
                 else bool(getattr(initial, "start_with_windows", True))
+            ),
+            ocr_enabled=(
+                self.ocr_checkbox.isChecked()
+                if self.ocr_checkbox is not None
+                else bool(getattr(initial, "ocr_enabled", True))
             ),
         )
 
@@ -1511,6 +1576,13 @@ class MainWindow(QMainWindow):
         #: Vrai pendant un arrêt voulu : la fermeture ne doit alors pas réduire
         #: l'application dans la zone de notification.
         self._quitting = False
+        #: Enregistrement (création/édition) en tâche de fond : un seul à la fois.
+        self._save_thread = None
+        self._save_worker = None
+        self._save_kind = ""
+        #: Vrai si l'utilisateur a demandé à quitter pendant un enregistrement :
+        #: l'arrêt est alors différé jusqu'à la fin du thread.
+        self._quit_after_save = False
 
         # Fil d'actualité : état de session pour la pastille de nouveauté
         # (défini avant la construction des onglets, qui lit cet état).
@@ -1521,7 +1593,8 @@ class MainWindow(QMainWindow):
         self.setGeometry(120, 120, 980, 680)
 
         self.tabs = QTabWidget()
-        self.new_case_tab_index = self.tabs.addTab(self._build_new_case_tab(), "➕ Nouveau cas")
+        self.new_case_page = self._build_new_case_tab()
+        self.new_case_tab_index = self.tabs.addTab(self.new_case_page, "➕ Nouveau cas")
         # Onglet « Fil d'actualité » (contenu à venir), juste après la saisie.
         # La pastille (⚪ par défaut, 🔵 si du nouveau) sert d'icône d'onglet.
         self.feed_tab_index = self.tabs.addTab(
@@ -1751,6 +1824,10 @@ class MainWindow(QMainWindow):
         Dans tous les cas, on ne touche à rien si le presse-papiers ne contient
         pas d'image (un texte copié n'efface pas l'image en cours).
         """
+        # Pendant un enregistrement de fond, le formulaire est figé : ne pas
+        # remplacer l'image sous les pieds du worker.
+        if self._save_thread is not None:
+            return
         # En mode édition, on ne remplace JAMAIS l'image du cas automatiquement.
         if self.edit_page is not None and self.tabs.currentWidget() is self.edit_page:
             return
@@ -2067,6 +2144,7 @@ class MainWindow(QMainWindow):
         save_btn = QPushButton("💾 ENREGISTRER LE CAS")
         save_btn.setStyleSheet("padding: 10px; background: #2e7d32; color: white; font-weight: bold;")
         save_btn.clicked.connect(self.save_case)
+        self.save_case_btn = save_btn
         right.addWidget(save_btn)
 
         clear_btn = QPushButton("❌ Effacer le formulaire")
@@ -2217,6 +2295,9 @@ class MainWindow(QMainWindow):
         return "\n".join((f"{emoji_map.get(u, '')} {u}").strip() for u in units)
 
     def save_case(self) -> None:
+        if self._save_thread is not None:
+            self._toast.show_message("⏳ Un enregistrement est déjà en cours…")
+            return
         title = self.title_input.text().strip()
         if not title:
             QMessageBox.warning(self, "Validation", "Le titre du cas est obligatoire.")
@@ -2247,25 +2328,18 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
 
-        try:
-            case = storage.create_case(
-                title=title,
-                units=units,
-                author=self.settings.user_name,
-                description=description,
-                image=self.current_image,
-                shared_root=self.settings.shared_root,
-                case_type=case_type,
-                visibility=visibility,
-            )
-        except Exception as exc:  # noqa: BLE001 (message clair à l'utilisateur)
-            QMessageBox.critical(self, "Échec de l'enregistrement", str(exc))
-            return
-
-        self.clear_case_fields()
-        self.reset_case_type()   # le type revient à « Standard » pour le prochain cas
-        self.reset_visibility()  # la visibilité revient à « Public »
-        self._toast.show_message(f"✅ Cas « {case.title} » enregistré.")
+        payload = dict(
+            title=title,
+            units=units,
+            author=self.settings.user_name,
+            description=description,
+            image=self.current_image.copy(),
+            shared_root=self.settings.shared_root,
+            case_type=case_type,
+            visibility=visibility,
+            ocr=getattr(self.settings, "ocr_enabled", True) and ocr.is_supported(),
+        )
+        self._start_save(SaveCaseWorker(payload), kind="create")
 
     def clear_case_fields(self) -> None:
         """Vide titre/description/image (les unités mémorisées sont conservées)."""
@@ -2381,6 +2455,7 @@ class MainWindow(QMainWindow):
         save_btn = QPushButton("💾 ENREGISTRER LES MODIFICATIONS")
         save_btn.setStyleSheet("padding: 10px; background: #7a4040; color: white; font-weight: bold;")
         save_btn.clicked.connect(self.save_edit)
+        self.save_edit_btn = save_btn
         right.addWidget(save_btn)
 
         cancel_btn = QPushButton("↩️ Annuler l'édition")
@@ -2487,6 +2562,9 @@ class MainWindow(QMainWindow):
     def save_edit(self) -> None:
         if self._editing_case is None:
             return
+        if self._save_thread is not None:
+            self._toast.show_message("⏳ Un enregistrement est déjà en cours…")
+            return
         title = self.edit_title_input.text().strip()
         if not title:
             QMessageBox.warning(self, "Validation", "Le titre du cas est obligatoire.")
@@ -2515,26 +2593,19 @@ class MainWindow(QMainWindow):
         )
         if dialog.exec() != QDialog.Accepted:
             return
-        try:
-            updated = storage.update_case(
-                case=self._editing_case,
-                title=title,
-                units=units,
-                author=self.settings.user_name,
-                description=description,
-                image=image_arg,
-                shared_root=self.settings.shared_root,
-                case_type=case_type,
-                visibility=visibility,
-            )
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Échec de la modification", str(exc))
-            return
-
-        self._close_edit_tab()
-        self._toast.show_message(f"✅ Cas « {updated.title} » modifié.")
-        if self.results_list.count():
-            self.run_search()
+        payload = dict(
+            case=self._editing_case,
+            title=title,
+            units=units,
+            author=self.settings.user_name,
+            description=description,
+            image=image_arg,
+            shared_root=self.settings.shared_root,
+            case_type=case_type,
+            visibility=visibility,
+            ocr=getattr(self.settings, "ocr_enabled", True) and ocr.is_supported(),
+        )
+        self._start_save(UpdateCaseWorker(payload), kind="edit")
 
     def _edit_image_qimage(self) -> "QImage | None":
         """Image du cas en édition sous forme de QImage (pour la confirmation)."""
@@ -2555,6 +2626,76 @@ class MainWindow(QMainWindow):
             self.tabs.removeTab(index)
         self._editing_case = None
         self.tabs.setCurrentIndex(self.consult_tab_index)
+
+    # --- Enregistrement en tâche de fond ---------------------------------- #
+    def _start_save(self, worker: QObject, *, kind: str) -> None:
+        """Lance ``worker`` dans un thread et désactive le formulaire concerné.
+
+        L'OCR natif Windows fait partie de l'appel ``storage.create_case`` /
+        ``storage.update_case`` : il s'exécute donc dans le thread de travail,
+        jamais dans le thread de l'interface. Le cas reste atomique : il
+        n'apparaît qu'une fois l'image, l'OCR et ``case.md`` écrits.
+        """
+        if self._save_thread is not None:
+            self._toast.show_message("⏳ Un enregistrement est déjà en cours…")
+            return
+
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_save_finished)
+        worker.failed.connect(self._on_save_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_save_state)
+        self._save_thread = thread
+        self._save_worker = worker
+        self._save_kind = kind
+
+        page = self.edit_page if kind == "edit" else self.new_case_page
+        if page is not None:
+            page.setEnabled(False)
+        self._toast.show_message("⏳ Enregistrement et lecture OCR…")
+        thread.start()
+
+    def _on_save_finished(self, case: storage.Case) -> None:
+        """Sauvegarde réussie : met à jour l'écran et le formulaire."""
+        if self._save_kind == "edit":
+            self._close_edit_tab()
+            self._toast.show_message(f"✅ Cas « {case.title} » modifié.")
+            if self.results_list.count():
+                self.run_search()
+            return
+
+        self.clear_case_fields()
+        self.reset_case_type()   # le type revient à « Standard » pour le prochain cas
+        self.reset_visibility()  # la visibilité revient à « Public »
+        suffix = ""
+        if case.ocr_status in (
+            ocr.STATUS_FAILED, ocr.STATUS_TIMEOUT, ocr.STATUS_UNSUPPORTED,
+        ):
+            suffix = " (texte OCR non extrait)"
+        self._toast.show_message(f"✅ Cas « {case.title} » enregistré.{suffix}")
+
+    def _on_save_failed(self, message: str) -> None:
+        """Sauvegarde en échec : la saisie reste intacte."""
+        QMessageBox.critical(self, "Échec de l'enregistrement", message)
+
+    def _clear_save_state(self) -> None:
+        """Réactive les formulaires et honore un arrêt différé."""
+        self._save_thread = None
+        self._save_worker = None
+        self._save_kind = ""
+        if getattr(self, "new_case_page", None) is not None:
+            self.new_case_page.setEnabled(True)
+        if self.edit_page is not None:
+            self.edit_page.setEnabled(True)
+        if self._quit_after_save:
+            self._quit_after_save = False
+            self.quit_app()
 
     # --- Onglet « Consulter » --------------------------------------------- #
     def _build_consult_tab(self) -> QWidget:
@@ -3103,8 +3244,18 @@ class MainWindow(QMainWindow):
         via le verrou mono-instance). L'arrêt réel passe par « Quitter ».
         """
         if self._quitting or self._tray is None or not self.settings.close_to_tray:
+            if self._save_thread is not None and not self._quitting:
+                # Ne pas détruire un QThread en cours d'enregistrement : on
+                # diffère l'arrêt jusqu'à la fin de la sauvegarde (quelques
+                # secondes au plus avec l'OCR).
+                event.ignore()
+                self._quit_after_save = True
+                self._toast.show_message(
+                    "⏳ Enregistrement en cours : l'arrêt suivra dès qu'il sera terminé…"
+                )
+                return
             event.accept()
-            QApplication.quit()
+            self.quit_app()
             return
         event.ignore()
         self.hide()
@@ -3147,10 +3298,20 @@ class MainWindow(QMainWindow):
         permet à un lancement immédiat (ou à la relance qui suit une mise à jour,
         voir ``updater._relaunch``) de démarrer sans se croire seconde instance.
         """
+        # Un enregistrement peut être en cours (OCR compris) : on ne détruit pas
+        # le thread de travail. L'arrêt est rejoué par ``_clear_save_state``.
+        if self._save_thread is not None:
+            self._quit_after_save = True
+            self._toast.show_message(
+                "⏳ Enregistrement en cours : l'arrêt suivra dès qu'il sera terminé…"
+            )
+            return
+
         self._quitting = True
         if self._tray is not None:
             self._tray.hide()
         self._release_single_instance()
+        ocr.shutdown()
         QApplication.quit()
 
     def _release_single_instance(self) -> None:

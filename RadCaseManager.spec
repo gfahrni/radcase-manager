@@ -19,6 +19,23 @@ les dépendances dans un environnement virtuel.
 # le répertoire courant.
 pathex = [SPECPATH]
 
+# OCR natif Windows : les paquets ``winrt-*`` contiennent des extensions
+# natives (.pyd). On les collecte explicitement, car l'analyse statique de
+# PyInstaller ne les voit pas toujours à travers les paquets-namespaces.
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
+WINRT_BINARIES = collect_dynamic_libs("winrt")
+WINRT_HIDDENIMPORTS = [
+    "winrt.runtime",
+    "winrt.system",
+    "winrt.windows.foundation",
+    "winrt.windows.foundation.collections",
+    "winrt.windows.globalization",
+    "winrt.windows.graphics.imaging",
+    "winrt.windows.media.ocr",
+    "winrt.windows.storage.streams",
+]
+
 # Modules embarqués par PySide6 mais inutilisés par l'application : on les
 # exclut pour alléger nettement le binaire (WebEngine, Quick/QML et 3D pèsent
 # à eux seuls plusieurs centaines de Mo). L'application n'utilise que
@@ -81,12 +98,12 @@ EXCLUDES = [
 a = Analysis(
     ["main_gui.py"],
     pathex=pathex,
-    binaries=[],
+    binaries=WINRT_BINARIES,
     # L'icône est embarquée dans le binaire : en mode « onefile », elle est
     # extraite dans ``sys._MEIPASS`` et chargée au démarrage par
     # ``main_gui._app_icon()`` (barre de titre + barre des tâches).
     datas=[("icone_radcasemanager.ico", ".")],
-    hiddenimports=[],
+    hiddenimports=WINRT_HIDDENIMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

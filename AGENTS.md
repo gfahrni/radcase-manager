@@ -11,8 +11,11 @@ presse-papiers, dans un **dossier réseau partagé**.
   l'enregistrement, qualité `storage.IMAGE_QUALITY` ; les cas historiques
   peuvent contenir un `image.png`).
 - `case.md` = frontmatter **YAML** (id, title, date_added, date_modified, case_type,
-  visibility, author, units, image) suivi de la description en markdown.
+  visibility, author, units, image, et si disponible `ocr_text` / `ocr_status`)
+  suivi de la description en markdown.
   `visibility` = `public` (défaut) ou `private` (masqué de la recherche des autres).
+  Le texte OCR (IPP, annotations…) est écrit **avant** le renommage atomique : un
+  cas visible est toujours complet.
 - **Pas de SQLite** (choix délibéré) : les cas sont **figés** (append-only), donc
   écriture dans un dossier temporaire `.tmp_<id>` puis `os.rename` **atomique**.
 - Réglages locaux **par utilisateur système** dans `settings_data/settings.json`,
@@ -30,6 +33,13 @@ presse-papiers, dans un **dossier réseau partagé**.
   `search_cases()`, plus l'**index local** (`settings_data/index.db`, cache
   reconstructible, maj par mtime). Scan de l'arbre **anti-rebondi** (TTL) pour
   qu'une rafale de lectures ne déclenche qu'un seul scan.
+- `ocr.py` : **OCR natif Windows** (`Windows.Media.Ocr`, paquets `winrt-*`),
+  sans modèle ni appel réseau. Import paresseux, dans un **thread dédié et
+  persistant** (WinRT fige le mode d'appartement du premier thread : ne pas
+  créer un thread par enregistrement). L'API est *best-effort* : statut
+  `ok` / `empty` / `unsupported` / `failed` / `timeout`, jamais d'exception.
+  Le texte est calculé pendant `storage.create_case()` / `update_case()`, donc
+  dans le worker de sauvegarde, jamais dans le thread de l'interface.
 - `thumbnails.py` : cache local des **vignettes d'affichage**
   (`settings_data/thumbs/`, reconstructible, jamais sur le partage). Décodage à
   la taille cible via `QImageReader.setScaledSize` : le plein format n'est jamais
@@ -83,6 +93,9 @@ presse-papiers, dans un **dossier réseau partagé**.
 - `main_gui.py` : interface PySide6 (onglets « Nouveau cas » / « Consulter »).
   Bibliothèque et Fil en **chargement progressif** (seule la fenêtre visible est
   construite) ; recherche rapide avec anti-rebond.
+  Création et édition passent par `SaveCaseWorker` / `UpdateCaseWorker` dans un
+  `QThread` : l'OCR et l'écriture disque ne figent pas l'interface. Un seul
+  enregistrement à la fois ; l'arrêt est différé si un worker tourne.
 
 ## Conventions
 - GUI en **PySide6** ; frontmatter en **PyYAML** ; capture image via **QClipboard**
@@ -91,13 +104,19 @@ presse-papiers, dans un **dossier réseau partagé**.
   suppression via **send2trash**.
 - L'onglet « Consulter » n'affiche **rien par défaut** (recherche à la demande),
   pour ne pas saturer avec des milliers de cas.
+- OCR : réglage local `ocr_enabled` (défaut `True`). Le texte est dans
+  `case.md` et dans l'index local ; `search_cases(..., include_ocr=True)` permet
+  de l'inclure dans la recherche, désactivé par défaut. Aucun OCR dans l'export
+  des résultats. Les anciens cas restent sans texte jusqu'à un rattrapage.
 - Fermer la fenêtre **réduit** l'application dans la zone de notification
   (`close_to_tray`) ; un vrai arrêt se fait par « Quitter » (menu Fichier ou
   icône). Toute nouvelle voie de sortie doit passer par `MainWindow.quit_app`
   (qui libère le verrou mono-instance), pas par `app.quit` directement.
 - Textes de l'UI et commentaires en **français**.
-- Ne pas modifier `archive/` : ce sont des instantanés par version (`v1/`, `v2.1/`…).
-  Le travail actif se fait à la racine du projet.
+- `archive/` ne contient plus d'instantanés de code : les versions antérieures sont
+  récupérables par leurs **tags** et **releases** GitHub (voir `archive/README.md`,
+  qui conserve le changelog par version). Ne pas y redéposer de copies du projet ;
+  `archive/` est désormais dans `.gitignore`. Le travail actif se fait à la racine.
 
 ## Commandes
 - Installer : `pip install -r requirements.txt` (environnement `.venv`).
@@ -124,7 +143,10 @@ presse-papiers, dans un **dossier réseau partagé**.
   actuelle depuis un **clone temporaire** du dépôt (synchroniser la racine
   dedans, puis commit + push sur `main`).
 - Pousser **la racine seule** (fichiers du projet : `*.py`, `*.md`, `.github/`,
-  etc.) ; **jamais `archive/`** (instantanés conservés en local uniquement).
+  etc.) ; **jamais `archive/`** (plus d'instantanés sur le disque : les versions
+  antérieures vivent sur GitHub, récupérables par tag ou release. Le dossier est
+  inscrit dans `.gitignore` et ne contient plus que le changelog
+  `archive/README.md`, conservé en local).
 - **Pas de tag** sauf demande explicite : un tag `v*` déclenche le build Windows
   (GitHub Actions) et crée une release.
 

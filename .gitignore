@@ -9,3 +9,7 @@ dist/
 *.db
 settings_data/
 .DS_Store
+# `archive/` ne doit jamais être poussé : il ne contient plus que le changelog
+# local `archive/README.md` (les anciennes versions vivent sur GitHub, par tag
+# et release). Voir AGENTS.md.
+archive/

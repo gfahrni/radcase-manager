@@ -11,6 +11,11 @@ Qt, donc aucune dépendance ajoutée).
 Les cas historiques peuvent contenir ``image.png`` : le nom réel du fichier est
 toujours relu dans le frontmatter (``image:``), jamais deviné.
 
+Le texte lu dans l'image par l'OCR natif Windows (voir ``ocr.py``) est stocké
+dans les champs optionnels ``ocr_text`` / ``ocr_status`` du frontmatter. Il est
+calculé **avant** l'écriture de ``case.md`` et le renommage atomique, donc un
+cas reste complet dès qu'il devient visible.
+
 Un cas est écrit dans un dossier temporaire ``.tmp_<id>`` puis renommé vers son
 nom final. Le renommage étant atomique sur un même volume, un cas n'existe que
 lorsqu'il est complet : jamais de cas à moitié écrit.
@@ -33,6 +38,7 @@ import yaml
 from send2trash import send2trash
 
 import config
+import ocr as ocr_backend
 
 CASES_DIRNAME = "cases"
 CASE_FILENAME = "case.md"
@@ -100,6 +106,10 @@ class Case:
     date_modified: Optional[str] = None
     case_type: str = "Standard"
     visibility: str = VISIBILITY_PUBLIC
+    #: Texte reconnu dans l'image par l'OCR Windows ("" si absent/échec).
+    ocr_text: str = ""
+    #: Statut de la dernière tentative OCR (``ok``, ``empty``, ``failed``…).
+    ocr_status: str = ""
 
     @property
     def image_path(self) -> Optional[Path]:
@@ -131,8 +141,26 @@ def _month_dir(shared_root: Path, when: datetime) -> Path:
 # --- Sérialisation ----------------------------------------------------------
 
 
+class _CaseDumper(yaml.SafeDumper):
+    """Dumper YAML des cas : texte multi-ligne en bloc littéral lisible."""
+
+
+def _represent_multiline(dumper, data: str):
+    """Écrit les textes contenant des retours à la ligne avec le style ``|``."""
+    style = "|" if "\n" in data else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+
+
+_CaseDumper.add_representer(str, _represent_multiline)
+
+
 def _render_case_md(meta: Dict[str, Any], description: str) -> str:
-    front = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
+    front = yaml.dump(
+        meta,
+        Dumper=_CaseDumper,
+        allow_unicode=True,
+        sort_keys=False,
+    ).strip()
     body = (description or "").strip()
     return f"---\n{front}\n---\n\n{body}\n"
 
@@ -173,6 +201,8 @@ def _parse_case_md(path: Path) -> Optional[Case]:
         date_modified=str(meta["date_modified"]) if meta.get("date_modified") else None,
         case_type=str(meta.get("case_type") or "Standard"),
         visibility=_normalize_visibility(meta.get("visibility")),
+        ocr_text=str(meta.get("ocr_text") or ""),
+        ocr_status=str(meta.get("ocr_status") or ""),
     )
 
 
@@ -267,6 +297,22 @@ def _save_image(image: Any, directory: Path, quality: int = IMAGE_QUALITY) -> st
     raise TypeError("Format d'image non supporté (attendu : bytes, QImage ou PIL.Image).")
 
 
+def _run_ocr(enabled: bool, directory: Path, image_name: Optional[str]) -> tuple[str, str]:
+    """Lit le texte de l'image déjà écrite dans ``directory`` (best-effort).
+
+    Retourne ``(texte, statut)``. Aucune exception n'est propagée : un OCR
+    indisponible ou en échec ne doit jamais empêcher l'enregistrement du cas.
+    """
+    if not enabled:
+        return "", ""
+    if not image_name:
+        return "", ocr_backend.STATUS_SKIPPED
+    try:
+        return ocr_backend.extract_text(directory / image_name)
+    except Exception:  # noqa: BLE001 - défense supplémentaire
+        return "", ocr_backend.STATUS_FAILED
+
+
 # --- Écriture ---------------------------------------------------------------
 
 
@@ -281,6 +327,7 @@ def create_case(
     when: Optional[datetime] = None,
     case_type: str = "Standard",
     visibility: str = VISIBILITY_PUBLIC,
+    ocr: bool = False,
 ) -> Case:
     """Crée un cas de façon atomique et retourne l'objet :class:`Case`.
 
@@ -290,6 +337,8 @@ def create_case(
     gardant les textes et cotes lisibles.
     ``visibility`` vaut ``"public"`` (défaut) ou ``"private"`` : un cas privé
     n'apparaît dans la recherche que pour son auteur.
+    ``ocr=True`` lit le texte de l'image (Windows uniquement) **avant** le
+    renommage atomique ; un échec OCR n'empêche jamais l'enregistrement.
     Lève ``ValueError`` si le titre est vide ou le dossier partagé manquant.
     """
     title = (title or "").strip()
@@ -319,6 +368,8 @@ def create_case(
         if image is not None:
             image_name = _save_image(image, tmp_dir)
 
+        ocr_text, ocr_status = _run_ocr(ocr, tmp_dir, image_name)
+
         meta = {
             "id": case_id,
             "title": title,
@@ -329,6 +380,10 @@ def create_case(
             "case_type": case_type or "Standard",
             "visibility": _normalize_visibility(visibility),
         }
+        if ocr_text:
+            meta["ocr_text"] = ocr_text
+        if ocr_status:
+            meta["ocr_status"] = ocr_status
         (tmp_dir / CASE_FILENAME).write_text(
             _render_case_md(meta, description), encoding="utf-8"
         )
@@ -348,6 +403,8 @@ def create_case(
         folder=final_dir,
         case_type=meta["case_type"],
         visibility=meta["visibility"],
+        ocr_text=ocr_text,
+        ocr_status=ocr_status,
     )
     _index_touch_case(result, shared_path)
     return result
@@ -367,6 +424,7 @@ def update_case(
     shared_root: str | Path,
     case_type: str = "Standard",
     visibility: Optional[str] = None,
+    ocr: bool = False,
 ) -> Case:
     """Met à jour un cas existant en réécrivant son dossier « à sa place ».
 
@@ -377,6 +435,8 @@ def update_case(
       ``None`` la retire, toute autre valeur (bytes/PIL/QImage) la remplace par
       une version JPEG ré-encodée.
     - ``visibility`` : ``None`` (défaut) conserve la visibilité du cas.
+    - ``ocr=True`` relit le texte si l'image est remplacée, ou complète un
+      ancien cas qui n'avait pas encore de texte OCR.
     - Écriture atomique par fichier (dossier temporaire puis renommage).
     """
     title = (title or "").strip()
@@ -395,12 +455,25 @@ def update_case(
     try:
         # 1) Image : conserver, retirer, ou remplacer.
         image_name: Optional[str] = None
+        ocr_text, ocr_status = "", ""
         if image is KEEP_IMAGE:
             if case.image and (final_dir / case.image).exists():
                 shutil.copy2(final_dir / case.image, tmp_dir / case.image)
                 image_name = case.image
+                # Le texte OCR existant reste valable tant que l'image ne change
+                # pas. On complète seulement les cas historiques (aucun statut).
+                ocr_text = case.ocr_text
+                ocr_status = case.ocr_status
+                if ocr and not ocr_text and ocr_status in ("", ocr_backend.STATUS_SKIPPED):
+                    ocr_text, ocr_status = _run_ocr(True, tmp_dir, image_name)
+            elif ocr:
+                ocr_status = ocr_backend.STATUS_SKIPPED
         elif image is not None:
             image_name = _save_image(image, tmp_dir)
+            ocr_text, ocr_status = _run_ocr(ocr, tmp_dir, image_name)
+        elif ocr:
+            # Image retirée : l'ancien texte OCR n'a plus de sens.
+            ocr_status = ocr_backend.STATUS_SKIPPED
 
         # 2) case.md : on conserve id + date_added, on ajoute date_modified.
         modified = datetime.now().isoformat(timespec="seconds")
@@ -418,6 +491,10 @@ def update_case(
             "case_type": case_type or "Standard",
             "visibility": visibility,
         }
+        if ocr_text:
+            meta["ocr_text"] = ocr_text
+        if ocr_status:
+            meta["ocr_status"] = ocr_status
         (tmp_dir / CASE_FILENAME).write_text(
             _render_case_md(meta, description), encoding="utf-8"
         )
@@ -441,6 +518,8 @@ def update_case(
         date_modified=modified,
         case_type=meta["case_type"],
         visibility=meta["visibility"],
+        ocr_text=ocr_text,
+        ocr_status=ocr_status,
     )
     _index_touch_case(result, Path(shared_root))
     return result
@@ -478,7 +557,7 @@ def delete_case(case: "Case") -> bool:
 
 # --- Index local (cache reconstructible) -------------------------------------
 
-INDEX_SCHEMA_VERSION = "2"
+INDEX_SCHEMA_VERSION = "3"
 
 #: Un scan complet de l'arbre ne sert qu'une fois par rafale d'appels : un même
 #: passage d'onglet déclenche plusieurs lectures successives (fil, badge,
@@ -514,7 +593,9 @@ def _index_connect() -> sqlite3.Connection:
             rel_path      TEXT NOT NULL,
             mtime         REAL,
             size          INTEGER,
-            visibility    TEXT
+            visibility    TEXT,
+            ocr_text      TEXT,
+            ocr_status    TEXT
         )"""
     )
     conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
@@ -526,6 +607,10 @@ def _index_connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE cases_index ADD COLUMN case_type TEXT")
     if "visibility" not in columns:
         conn.execute("ALTER TABLE cases_index ADD COLUMN visibility TEXT")
+    if "ocr_text" not in columns:
+        conn.execute("ALTER TABLE cases_index ADD COLUMN ocr_text TEXT")
+    if "ocr_status" not in columns:
+        conn.execute("ALTER TABLE cases_index ADD COLUMN ocr_status TEXT")
     return conn
 
 
@@ -544,7 +629,8 @@ def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 def _row_to_case(row: tuple, root: Path) -> Case:
     (case_id, title, date_added, date_modified, case_type, author, units, image,
-     description, rel_path, _mtime, _size, visibility) = row
+     description, rel_path, _mtime, _size, visibility, ocr_text,
+     ocr_status) = row
     return Case(
         id=case_id,
         title=title or "",
@@ -557,23 +643,26 @@ def _row_to_case(row: tuple, root: Path) -> Case:
         date_modified=date_modified or None,
         case_type=case_type or "Standard",
         visibility=_normalize_visibility(visibility),
+        ocr_text=ocr_text or "",
+        ocr_status=ocr_status or "",
     )
 
 
 def _index_upsert(conn: sqlite3.Connection, case: Case, rel_path: str, mtime: float, size: int) -> None:
     conn.execute(
         """INSERT INTO cases_index
-             (id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             (id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility, ocr_text, ocr_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              title=excluded.title, date_added=excluded.date_added, date_modified=excluded.date_modified,
              case_type=excluded.case_type, author=excluded.author, units=excluded.units,
              image=excluded.image, description=excluded.description, rel_path=excluded.rel_path,
-             mtime=excluded.mtime, size=excluded.size, visibility=excluded.visibility""",
+             mtime=excluded.mtime, size=excluded.size, visibility=excluded.visibility,
+             ocr_text=excluded.ocr_text, ocr_status=excluded.ocr_status""",
         (
             case.id, case.title, case.date_added, case.date_modified, case.case_type, case.author,
             json.dumps(case.units, ensure_ascii=False), case.image, case.description,
-            rel_path, mtime, size, case.visibility,
+            rel_path, mtime, size, case.visibility, case.ocr_text, case.ocr_status,
         ),
     )
 
@@ -721,7 +810,7 @@ def _index_remove(case_id: str) -> None:
 # --- Lecture / recherche -----------------------------------------------------
 
 
-_SELECT_COLS = "id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility"
+_SELECT_COLS = "id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility, ocr_text, ocr_status"
 
 
 def list_cases(shared_root: str | Path, viewer: str = "") -> List[Case]:
@@ -756,6 +845,7 @@ def search_cases(
     viewer: str = "",
     visibility: Optional[str] = None,
     case_types: Optional[Iterable[str]] = None,
+    include_ocr: bool = False,
 ) -> List[Case]:
     """Recherche multi-critères, exécutée sur l'index local.
 
@@ -767,6 +857,10 @@ def search_cases(
 
     ``visibility`` restreint à ``"public"`` ou ``"private"`` (``None`` : les deux,
     les cas privés d'autrui restant exclus).
+
+    ``include_ocr=True`` étend la recherche plein texte au contenu OCR des
+    images (désactivé par défaut, pour ne pas modifier le comportement
+    historique de la recherche libre).
     """
     root = Path(shared_root)
     refresh_index(root)
@@ -810,8 +904,12 @@ def search_cases(
             ok = wanted.issubset(case_units) if unit_match_all else bool(wanted & case_units)
             if not ok:
                 continue
-        if text_l and text_l not in f"{case.title}\n{case.description}".casefold():
-            continue
+        if text_l:
+            haystack = f"{case.title}\n{case.description}"
+            if include_ocr:
+                haystack += "\n" + case.ocr_text
+            if text_l not in haystack.casefold():
+                continue
         results.append(case)
     return results
 

@@ -20,6 +20,11 @@ partagé**.
 - **Cas figés** (append-only) : on n'écrit jamais deux fois le même cas, ce qui
   évite tout conflit de verrou sur le partage réseau.
 - **Écriture atomique** : dossier temporaire `.tmp_<id>` puis renommage.
+- **OCR natif Windows** : le texte de l'image (IPP, annotations…) est lu à
+  l'enregistrement par `Windows.Media.Ocr`, sans moteur externe ni réseau. Le
+  texte est stocké dans `case.md` (`ocr_text` / `ocr_status`) et ajouté à
+  l'index local. La lecture et l'écriture se font dans un thread de fond : la
+  fenêtre ne se fige jamais, et un échec OCR n'empêche pas l'enregistrement.
 - **Visibilité** : chaque cas est `public` (défaut) ou `privé`. Un cas privé
   n'apparaît dans la recherche que pour son auteur.
 - **Réglages locaux** dans `settings_data/settings.json`, dans le profil de
@@ -183,6 +188,7 @@ Voir `autostart.py`.
 | `config.py` | réglages locaux et chemins |
 | `bootstrap.py` | initialisation du dossier partagé |
 | `storage.py` | création atomique, lecture et recherche des cas |
+| `ocr.py` | OCR natif Windows, en tâche de fond (`Windows.Media.Ocr`) |
 | `thumbnails.py` | cache local des vignettes d'affichage |
 | `tray.py` | zone de notification (icône + menu) et verrou mono-instance |
 | `autostart.py` | inscription au démarrage de Windows (clé `Run` du compte) |
@@ -219,9 +225,15 @@ case = storage.create_case(
     image=None,
     shared_root="/chemin/vers/dossier/partage",
     visibility="public",   # ou "private" : visible du seul auteur
+    ocr=True,              # Windows uniquement ; échec non bloquant
 )
-print(case.folder)
+print(case.folder, case.ocr_status)
 ```
+
+L'OCR est désactivé hors Windows (statut `unsupported`). Sur Windows, il dépend
+du pack de langue OCR installé (`Paramètres → Langue → Reconnaissance optique de
+caractères`) ; le français est utilisé lorsqu'il est disponible, sinon le
+premier pack installé.
 
 Le module `updater` se teste également en ligne de commande :
 
@@ -242,3 +254,4 @@ python updater.py download    # télécharge l'exécutable dans le dossier coura
   verrou mono-instance — voir `tray.py`
 - [x] Lancement automatique à l'ouverture de session Windows (réduit dans la zone
   de notification) — voir `autostart.py`
+- [x] OCR natif Windows à l'enregistrement, en tâche de fond — voir `ocr.py`
