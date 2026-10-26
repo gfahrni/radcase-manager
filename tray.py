@@ -12,8 +12,9 @@ Deux mécanismes, tous deux sans dépendance externe (PySide6 uniquement) :
   lancerait un second processus : deux icônes, deux index locaux, deux écritures
   concurrentes sur le dossier partagé. Un second lancement **réveille** donc
   l'instance existante, puis rend la main.
-- :class:`TrayIcon` — icône + menu contextuel (Ouvrir / Réglages… / Quitter) et
-  notifications, pour garder l'application pilotable fenêtre masquée.
+- :class:`TrayIcon` — icône + menu contextuel (Ouvrir / Réglages… / Quitter),
+  notifications, et **pastille rouge** (« du nouveau dans le Fil ») pour garder
+  l'application pilotable fenêtre masquée.
 
 Choix d'implémentation (voir aussi ``ARCHITECTURE_PLAN.md``) : le verrou n'est
 **pas** un fichier de verrou (``QLockFile``), mais un **canal local nommé**
@@ -41,8 +42,8 @@ import ctypes
 import sys
 import time
 
-from PySide6.QtCore import QObject, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QObject, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -64,6 +65,18 @@ ACQUIRE_DELAY_S = 0.4
 
 #: Durée d'affichage des notifications (millisecondes).
 NOTIFY_MS = 6000
+
+#: Infobulle au repos (et préfixe des infobulles d'alerte).
+BASE_TOOLTIP = "RadCase Manager"
+
+#: Tailles produites pour l'icône « du nouveau ». Le tray Windows affiche 16 px
+#: en mode compact, 24 px à 100 % et 32 px à 150 % : fournir ces tailles (et les
+#: suivantes) évite un redimensionnement flou au moment de l'affichage.
+ALERT_SIZES = (16, 24, 32, 48, 64)
+
+#: Couleur de la pastille de nouveauté (rouge mat, lisible sur fond sombre comme
+#: sur fond clair).
+ALERT_COLOR = "#E53935"
 
 #: Code d'erreur Windows « l'objet nommé existe déjà » (``ERROR_ALREADY_EXISTS``).
 ERROR_ALREADY_EXISTS = 183
@@ -274,6 +287,60 @@ class SingleInstance(QObject):
             self.activated.emit()
 
 
+def badged_icon(base: QIcon, color: str = ALERT_COLOR) -> QIcon:
+    """Dérive de ``base`` une icône portant une **pastille rouge** en bas à droite.
+
+    Sert d'indicateur « du nouveau dans le Fil » quand la fenêtre est masquée :
+    la zone de notification ne propose pas de badge, il faut donc changer
+    l'icône elle-même. La pastille est peinte à chaque taille plutôt que
+    redimensionnée, pour rester nette à 16 px (taille réelle du tray en mode
+    compact) comme à 32 px (Windows à 150 %).
+
+    Le dessin se fait en **pixels réels** (ratio de pixels neutralisé le temps de
+    la peinture) : la pastille garde ainsi la même proportion quel que soit
+    l'écran. Un liseré blanc la détache de l'icône, sombre par nature.
+
+    Retourne une icône **nulle** si ``base`` est nulle : l'appelant garde alors
+    l'icône d'origine (voir :meth:`TrayIcon.set_alert`).
+    """
+    result = QIcon()
+    if base.isNull():
+        return result
+    for size in ALERT_SIZES:
+        pixmap = base.pixmap(size, size)
+        if pixmap.isNull():
+            continue
+        ratio = pixmap.devicePixelRatio() or 1.0
+        image = pixmap.toImage()
+        image.setDevicePixelRatio(1.0)  # peinture en pixels réels
+        if image.isNull() or image.width() <= 0:
+            continue
+
+        real = float(image.width())
+        dot = real * 0.46
+        ring = max(1.0, real * 0.05)
+        margin = max(1.0, real * 0.03)
+        right = real - margin
+        left = right - dot
+        top = right - dot
+
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawEllipse(
+            QRectF(left - ring, top - ring, dot + 2 * ring, dot + 2 * ring)
+        )
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(QRectF(left, top, dot, dot))
+        painter.end()
+
+        alert = QPixmap.fromImage(image)
+        alert.setDevicePixelRatio(ratio)
+        result.addPixmap(alert)
+    return result
+
+
 class TrayIcon(QObject):
     """Icône de la zone de notification + menu contextuel.
 
@@ -290,12 +357,22 @@ class TrayIcon(QObject):
         on_open,
         on_settings,
         on_quit,
+        on_message_clicked=None,
     ) -> None:
         super().__init__(parent)
         self._on_open = on_open
 
+        # Icône au repos et variante « du nouveau » : la seconde est calculée une
+        # seule fois, puis posée uniquement aux transitions (voir ``set_alert``).
+        # Changer d'icône à chaque vérification ferait clignoter le tray et
+        # laisserait des icônes fantômes dans Explorer.
+        self._base_icon = icon
+        self._alert_icon = badged_icon(icon)
+        self._alert = False
+        self._count = 0
+
         self._icon = QSystemTrayIcon(icon, self)
-        self._icon.setToolTip("RadCase Manager")
+        self._icon.setToolTip(BASE_TOOLTIP)
 
         # Le menu doit rester référencé : ``setContextMenu`` n'en prend pas
         # possession.
@@ -307,6 +384,11 @@ class TrayIcon(QObject):
         self._icon.setContextMenu(self._menu)
 
         self._icon.activated.connect(self._on_activated)
+
+        # Un clic sur la bannière (toast) doit mener quelque part : sans cela,
+        # Windows la referme simplement et l'information est perdue.
+        if on_message_clicked is not None:
+            self._icon.messageClicked.connect(on_message_clicked)
 
     @staticmethod
     def available() -> bool:
@@ -322,6 +404,39 @@ class TrayIcon(QObject):
     def notify(self, title: str, message: str, msecs: int = NOTIFY_MS) -> None:
         """Notification système (bulle/toast), affichée à côté de l'icône."""
         self._icon.showMessage(title, message, QSystemTrayIcon.Information, msecs)
+
+    def set_alert(self, active: bool, count: int = 0) -> None:
+        """Signale « du nouveau » par une **pastille rouge** sur l'icône.
+
+        Idempotent et bon marché : l'icône n'est remplacée qu'au changement
+        d'état (repos ↔ nouveau), l'infobulle est rafraîchie à chaque appel (elle
+        porte le nombre). Sans variante disponible (icône de base illisible),
+        seule l'infobulle change : mieux vaut cela qu'une icône nulle, qui
+        ferait disparaître l'icône du tray.
+
+        ``count`` : nombre de cas nouveaux, pour l'infobulle. ``0`` avec
+        ``active=True`` reste valide (« du nouveau », sans décompte).
+        """
+        active = bool(active)
+        count = max(0, int(count))
+        self._count = count
+        if active != self._alert:
+            self._alert = active
+            if not self._alert_icon.isNull():
+                self._icon.setIcon(self._alert_icon if active else self._base_icon)
+        self._icon.setToolTip(self._tooltip())
+
+    def _tooltip(self) -> str:
+        """Infobulle : nombre de nouveaux cas, ou état au repos."""
+        if not self._alert:
+            return BASE_TOOLTIP
+        if self._count <= 0:
+            return f"{BASE_TOOLTIP} — du nouveau dans le Fil"
+        # Au-delà de 99, le décompte exact n'apporte rien (et l'infobulle
+        # Windows est limitée en longueur).
+        shown = str(self._count) if self._count < 100 else "99+"
+        plural = "nouveaux cas" if self._count > 1 else "nouveau cas"
+        return f"{BASE_TOOLTIP} — {shown} {plural}"
 
     def _on_activated(self, reason) -> None:
         """Clic sur l'icône : double-clic, ou clic simple (Windows)."""

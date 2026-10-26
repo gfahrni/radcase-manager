@@ -67,6 +67,12 @@ FEED_DOT_NOTIFY = "🔵"
 #: Intervalle de vérification du badge de nouveauté du fil (millisecondes).
 FEED_BADGE_INTERVAL_MS = 5 * 60 * 1000
 
+#: Reprendre le titre du cas dans la bannière système (voir
+#: ``MainWindow._notify_new_cases``). Le mettre à ``False`` donne une bannière
+#: neutre (« US — un nouveau cas ») : un titre de cas peut contenir un nom de
+#: patient, et Windows affiche aussi ses notifications sur l'écran verrouillé.
+TRAY_TOAST_WITH_TITLE = True
+
 #: Délai avant la recherche automatique de mise à jour (millisecondes) : on
 #: laisse la fenêtre s'afficher et l'interface se stabiliser.
 UPDATE_CHECK_DELAY_MS = 4000
@@ -1205,13 +1211,48 @@ def _date_label(moment) -> str:
     return f"{_JOURS_FR[moment.weekday()]} {moment.day:02d}.{moment.month:02d}.{moment.year}"
 
 
+#: Séparateur des blocs de la ligne de contexte d'une carte du fil.
+FEED_META_SEP = "\u00a0·  "
+
+
+def _feed_meta_text(case: storage.Case, unit_emoji: dict) -> str:
+    """Ligne de contexte d'une carte du fil, au-dessus de l'image.
+
+    Trois blocs dans l'ordre demandé : **unités** (icône + nom), **date et
+    heure**, **type de cas** (icône + nom). L'auteur n'y figure pas : la carte
+    montre un cas, pas une personne.
+    """
+    units = []
+    for name in case.units or ():
+        emoji = (unit_emoji.get(name) or "").strip()
+        # espace insécable : l'icône ne se sépare jamais de son libellé
+        units.append(f"{emoji}\u00a0{name}".strip())
+    # virgules entre unités, séparateur large entre les blocs
+    unit_block = ", ".join(units) if units else "Sans unité"
+
+    moment = case.datetime
+    if moment is not None:
+        date_block = (
+            f"{moment.day:02d}.{moment.month:02d}.{moment.year}\u00a0{moment:%H:%M}"
+        )
+    else:
+        date_block = (case.date_added or "")[:10]
+
+    type_emoji = (bootstrap.CASE_TYPE_EMOJI.get(case.case_type) or "").strip()
+    type_block = f"{type_emoji}\u00a0{case.case_type}".strip()
+
+    return FEED_META_SEP.join([unit_block, date_block, type_block])
+
+
 class FeedView(QWidget):
     """Fil chronologique type chat (le plus récent en bas).
 
     Les cas sont listés du plus ancien (haut) au plus récent (bas) ; la vue se
     positionne sur l'instant d'ancrage (par défaut : tout en bas). Un séparateur
-    indique le changement de jour. Chaque carte affiche l'image en grand, le
-    titre puis la description. Les cas « nouveaux » (non lus) ont un fond bleu,
+    indique le changement de jour. Chaque carte affiche, de haut en bas : une
+    ligne de contexte (**unités** avec leur icône, **date et heure**, **type de
+    cas** avec son icône — jamais l'auteur), l'image en grand, le titre puis la
+    description. Les cas « nouveaux » (non lus) ont un fond bleu,
     qui reste tant que la carte est visible : il s'efface quand la carte **sort
     de l'écran** (défilement passé) ou est cliquée.
     """
@@ -1241,6 +1282,7 @@ class FeedView(QWidget):
         self._seen_ids: set = set()         # cas déjà passés dans la zone visible
         self._cards_by_id: dict = {}        # id de cas -> carte
         self._cases: list = []              # cas du fil (ancien → récent)
+        self._unit_emoji: dict = {}         # nom d'unité -> emoji (units.json)
         self._win_start = 0                 # borne basse de la fenêtre construite
         self._win_end = 0                   # borne haute (exclue)
         self._extending = False             # garde anti-réentrance (extension)
@@ -1277,6 +1319,18 @@ class FeedView(QWidget):
     def set_settings(self, settings: config.Settings) -> None:
         self.settings = settings
 
+    def _refresh_unit_emoji(self) -> None:
+        """Recharge la table unité → emoji (``units.json`` peut avoir changé)."""
+        try:
+            units = bootstrap.load_units(self.settings.shared_root)
+        except Exception:  # noqa: BLE001 (vue best-effort)
+            units = []
+        self._unit_emoji = {
+            unit["name"]: unit.get("emoji", "")
+            for unit in units
+            if unit.get("name")
+        }
+
     def load(self, anchor=None, units=None, unread_ids=None, case_types=None,
              cases=None) -> None:
         """Reconstruit le fil autour de l'instant d'ancrage (fenêtre progressive).
@@ -1290,6 +1344,7 @@ class FeedView(QWidget):
         ``case_types`` : types de cas à afficher (``None`` = tous).
         ``cases`` : cas déjà chargés (évite un second scan) ; ``None`` les charge.
         """
+        self._refresh_unit_emoji()
         self._unread_ids = set(unread_ids or ())
         self._seen_ids = set()
         self._cards_by_id = {}
@@ -1524,7 +1579,7 @@ class FeedView(QWidget):
         return container
 
     def _make_feed_card(self, case: storage.Case) -> QFrame:
-        """Carte du fil : grande image (cliquable) + titre + description (légende)."""
+        """Carte du fil : contexte (unités, date, type) + image + titre + légende."""
         card = FeedCard()
         card.setObjectName("feedCard")
         card.setAttribute(Qt.WA_StyledBackground, True)
@@ -1535,6 +1590,15 @@ class FeedView(QWidget):
         column = QVBoxLayout(card)
         column.setContentsMargins(16, 16, 16, 16)
         column.setSpacing(8)
+
+        # Ligne de contexte, au-dessus de l'image : unités (icône + nom), date et
+        # heure, type de cas (icône + nom). Pas d'auteur : la carte montre un cas.
+        # Le texte peut passer sur deux lignes si les noms d'unités sont longs.
+        meta = QLabel(_feed_meta_text(case, self._unit_emoji))
+        meta.setWordWrap(True)
+        meta.setFixedWidth(FEED_IMG_W)
+        meta.setStyleSheet("color:#b3bac1; font-size:12px;")
+        column.addWidget(meta)
 
         image = ClickableLabel()
         image.setFixedSize(FEED_IMG_W, FEED_IMG_H)
@@ -1622,6 +1686,11 @@ class MainWindow(QMainWindow):
         # (défini avant la construction des onglets, qui lit cet état).
         self._feed_session_watermark = settings.feed_last_seen or ""
         self._feed_read_ids: set = set()
+        #: État de l'alerte du tray (voir ``_update_tray_alert``) : sert à ne
+        #: déclencher la bannière qu'au passage repos → nouveau, et à ne pas en
+        #: afficher au démarrage (``_tray_alert_ready``).
+        self._tray_alert_active = False
+        self._tray_alert_ready = False
 
         self.setWindowTitle("RadCase Manager")
         self.setGeometry(120, 120, 980, 680)
@@ -1742,12 +1811,23 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 (vue best-effort)
             return []
 
-    def _unread_cases(self, cases=None) -> list:
+    def _unread_cases(
+        self,
+        cases=None,
+        *,
+        since: str | None = None,
+        include_read: bool = False,
+    ) -> list:
         """Cas du fil « nouveaux » (non lus) pour la session courante.
 
-        Nouveau = visible, dans une unité suivie, plus récent que le filigrane de
-        session, hors mes propres cas, et pas encore lu cette session.
+        Nouveau = visible, dans une unité suivie, plus récent que le filigrane,
+        hors mes propres cas, et — sauf ``include_read`` — pas encore lu cette
+        session.
         ``cases`` : liste déjà chargée (évite un second scan) ; ``None`` la charge.
+        ``since`` : filigrane à utiliser (défaut : début de session). Le tray
+        passe ``feed_last_seen`` pour une sémantique « depuis la dernière visite
+        du Fil » (voir :meth:`_update_tray_alert`).
+        ``include_read`` : ignorer les cartes déjà vues dans cette session.
         """
         units = self.selected_feed_units()
         if not units:
@@ -1755,7 +1835,7 @@ class MainWindow(QMainWindow):
         wanted = {u.casefold() for u in units}
         boxes = getattr(self, "feed_case_type_checkboxes", None)
         types = checked_case_types(boxes) if boxes is not None else None
-        since = self._feed_session_watermark or ""
+        watermark = self._feed_session_watermark if since is None else since
         me = (self.settings.user_name or "").strip().casefold()
         if cases is None:
             cases = self._load_visible_cases()
@@ -1765,11 +1845,11 @@ class MainWindow(QMainWindow):
                 continue
             if types is not None and case.case_type not in types:
                 continue
-            if since and (case.date_added or "") <= since:
+            if watermark and (case.date_added or "") <= watermark:
                 continue
             if me and case.author.strip().casefold() == me:
                 continue  # ne pas compter mes propres cas
-            if case.id in self._feed_read_ids:
+            if not include_read and case.id in self._feed_read_ids:
                 continue
             result.append(case)
         return result
@@ -1798,6 +1878,90 @@ class MainWindow(QMainWindow):
             cases = self._load_visible_cases()
         count = len(self._unread_cases(cases))
         self.set_feed_dot(FEED_DOT_NOTIFY if count else FEED_DOT_EMOJI, count)
+        self._update_tray_alert(cases)
+
+    def _update_tray_alert(self, cases=None) -> None:
+        """Pastille rouge de l'icône de notification : « du nouveau depuis la visite ».
+
+        Sémantique volontairement **distincte** de l'onglet : l'icône redevient
+        normale dès que le Fil est ouvert (``feed_last_seen`` est alors réécrit),
+        alors que le compteur de l'onglet attend que chaque carte ait défilé à
+        l'écran. Sans quoi l'icône resterait rouge après une visite rapide, ce
+        qui est le pire des signaux pour un indicateur de tray.
+
+        Les filtres restent ceux du Fil (unités suivies, types, propres cas) :
+        l'icône ne signale pas « un cas de plus sur le partage », mais bien « du
+        nouveau dans *ton* fil ». Tant qu'aucune visite n'est enregistrée
+        (première installation), il n'y a pas de référence : pas de pastille.
+        """
+        tray_icon = getattr(self, "_tray", None)
+        if tray_icon is None:
+            return
+        watermark = self.settings.feed_last_seen or ""
+        if not watermark:
+            # Aucune visite du Fil enregistrée : il n'y a pas de « depuis » auquel
+            # comparer. Sans cette garde, une première installation allumerait
+            # l'icône pour tout l'historique (« 99+ nouveaux cas »), alors que ces
+            # cas ne sont pas nouveaux.
+            tray_icon.set_alert(False)
+            return
+        if cases is None:
+            cases = self._load_visible_cases()
+        fresh = self._unread_cases(cases, since=watermark, include_read=True)
+        active = bool(fresh)
+        was_active = self._tray_alert_active
+        ready = self._tray_alert_ready
+        self._tray_alert_active = active
+        self._tray_alert_ready = True
+        tray_icon.set_alert(active, len(fresh))
+        if active and not was_active and ready and self._window_hidden():
+            self._notify_new_cases(fresh)
+
+    def _window_hidden(self) -> bool:
+        """Vrai si la fenêtre n'est ni affichée ni réduite dans la barre des tâches.
+
+        Seul cas où la bannière apporte quelque chose : fenêtre visible, l'onglet
+        du Fil porte déjà l'information et la bannière ne ferait que gêner.
+        """
+        return (not self.isVisible()) or self.isMinimized()
+
+    def _notify_new_cases(self, fresh: list) -> None:
+        """Bannière système : **une seule** par vague, sur le cas le plus récent.
+
+        Pas une bannière par cas : plusieurs cas déposés d'un coup produiraient
+        une salve de notifications, et Windows finirait par les regrouper. Le
+        titre du cas est ramené sur une ligne et raccourci (une notification
+        système tronque de toute façon, autant choisir où).
+        """
+        tray_icon = getattr(self, "_tray", None)
+        if tray_icon is None:
+            return
+        count = len(fresh)
+        newest = max(fresh, key=lambda case: case.date_added or "")
+        units = " / ".join(newest.units) or "Sans unité"
+
+        if count == 1:
+            title = "Nouveau cas dans le Fil"
+        else:
+            title = f"{count} nouveaux cas dans le Fil"
+
+        if TRAY_TOAST_WITH_TITLE:
+            label = " ".join((newest.title or "").split()) or newest.id
+            if len(label) > 70:
+                label = label[:69].rstrip() + "…"
+            message = f"{units} — {label}"
+        else:
+            message = f"{units} — un nouveau cas"
+        if count > 1:
+            others = count - 1
+            message += f"\n+ {others} autre" + ("s" if others > 1 else "") + " cas"
+        tray_icon.notify(title, message)
+
+    def _open_feed_from_toast(self) -> None:
+        """Clic sur la bannière : ramène la fenêtre **sur le Fil d'actualité**."""
+        self.restore_from_tray()
+        if hasattr(self, "feed_tab_index"):
+            self.tabs.setCurrentIndex(self.feed_tab_index)
 
     # --- Synchronisation ponctuelle du presse-papiers (activation / onglet) ---
     def changeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
@@ -3304,6 +3468,7 @@ class MainWindow(QMainWindow):
             on_open=self.restore_from_tray,
             on_settings=self._open_settings_from_tray,
             on_quit=self.quit_app,
+            on_message_clicked=self._open_feed_from_toast,
         )
         tray_icon.show()
         return tray_icon

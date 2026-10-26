@@ -163,6 +163,18 @@ applications portables, elle **se réduit dans la zone de notification** (le car
 Au premier passage en zone de notification, une bulle explique que l'application
 tourne toujours (l'icône peut être cachée derrière le « ^ » de Windows 11).
 
+- **Pastille de nouveauté** : quand le **Fil d'actualité** contient des cas arrivés
+  depuis la dernière visite, l'icône se pare d'un **point rouge** et son infobulle
+  indique le nombre (`3 nouveaux cas`). Elle redevient normale dès que l'onglet
+  « Fil d'actualité » est ouvert. Le signal suit les mêmes règles que le Fil
+  (unités suivies, hors vos propres cas) ; il ne s'affiche donc pas pour un cas
+  déposé dans une unité que vous ne suivez pas.
+- **Bannière système** : au passage de « rien de neuf » à « du nouveau », et
+  **seulement si la fenêtre est masquée**, Windows affiche une notification
+  (`Nouveau cas dans le Fil` / `US — TDM thoracique`). Un clic dessus ramène la
+  fenêtre directement sur le Fil. Une seule bannière par vague, jamais une par cas.
+  Elle peut être coupée par Windows (*Ne pas déranger*) : la pastille rouge, elle,
+  reste fiable.
 - Le comportement est **réglable** : *Réglages… → Fenêtre* ; décoché, fermer la
   fenêtre arrête l'application comme avant.
 - **Un seul lancement à la fois** : si l'application tourne déjà, double-cliquer
@@ -262,6 +274,8 @@ python updater.py download    # télécharge l'exécutable dans le dossier coura
   `AUTO_UPDATE_PLAN.md`
 - [x] Mode « barre d'état système » (réduction dans la zone de notification) et
   verrou mono-instance — voir `tray.py`
+- [x] Pastille rouge dans la zone de notification quand le Fil a du nouveau — voir
+  `tray.py` (`badged_icon`, `set_alert`)
 - [x] Lancement automatique à l'ouverture de session Windows (réduit dans la zone
   de notification) — voir `autostart.py`
 - [x] OCR natif Windows à l'enregistrement, en tâche de fond — voir `ocr.py`

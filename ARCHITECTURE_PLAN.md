@@ -265,6 +265,22 @@ Points d'implémentation :
   > nom — les deux instances se croient alors seules. Le cloisonnement par
   > utilisateur vient du **nom** du canal.
 
+- **Pastille de nouveauté** (`tray.badged_icon` / `TrayIcon.set_alert`) : l'icône
+  est déclinée en une variante à **point rouge**, peinte aux tailles 16 → 64 px
+  (le tray Windows affiche 16 px en mode compact, 24 px à 100 %, 32 px à 150 %),
+  et n'est remplacée qu'aux transitions repos ↔ nouveau — la changer à chaque
+  vérification ferait clignoter l'icône et laisserait des icônes fantômes dans
+  Explorer. La sémantique est « du nouveau **depuis la dernière visite du Fil** »
+  (`feed_last_seen`), volontairement plus simple que le compteur de l'onglet, qui
+  n'éteint une carte qu'après son défilement à l'écran : sinon l'icône resterait
+  rouge après une visite rapide.
+- **Bannière système** (`TrayIcon.notify`) : au passage repos → nouveau et
+  **fenêtre masquée** uniquement (sinon l'onglet porte déjà l'information), une
+  seule notification par vague, sur le cas le plus récent. Son clic
+  (`QSystemTrayIcon.messageClicked`) ramène la fenêtre sur le Fil. Le titre du cas
+  peut être masqué par `main_gui.TRAY_TOAST_WITH_TITLE = False` (bannière neutre),
+  car Windows affiche aussi ses notifications sur l'écran verrouillé. Aucune
+  bannière au démarrage : seule la pastille rouge rappelle l'état.
 - **Interaction avec la mise à jour automatique** : au redémarrage, la nouvelle
   version démarre pendant que l'ancienne achève de s'arrêter. L'ancienne instance
   **libère donc le canal avant d'appliquer la mise à jour**

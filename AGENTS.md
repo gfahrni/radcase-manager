@@ -69,7 +69,14 @@ presse-papiers, dans un **dossier réseau partagé**.
   assurée par un **mutex nommé** (`CreateMutexW`, `_acquire_windows`) : atomique,
   dans l'espace de la session, **libéré par l'OS à la mort du processus** (donc
   sans le verrou orphelin qui avait fait écarter `QLockFile`). Le canal n'y sert
-  plus qu'au réveil.
+  plus qu'au réveil. L'icône est déclinée en une variante **point rouge**
+  (`tray.badged_icon`, `TrayIcon.set_alert`) quand le Fil a du nouveau depuis la
+  dernière visite (`feed_last_seen`) ; elle n'est remplacée qu'aux transitions
+  repos ↔ nouveau (sinon icônes fantômes dans Explorer), et la sémantique est
+  volontairement plus simple que le compteur de l'onglet (voir `README.md`).
+  Une **bannière système** (`TrayIcon.notify`, clic ⇒ `messageClicked`) est
+  affichée une seule fois par vague, fenêtre masquée seulement ; pas de bannière
+  au démarrage.
 - `autostart.py` : **démarrage automatique à l'ouverture de session** (réglage
   `start_with_windows`, défaut `True`), via la clé `Run` du **compte courant**
   (`HKCU\…\CurrentVersion\Run`, aucun droit administrateur). L'entrée est
