@@ -212,6 +212,7 @@ Voir `autostart.py`.
 | `storage.py` | création atomique, lecture et recherche des cas |
 | `ocr.py` | OCR natif Windows, en tâche de fond (`Windows.Media.Ocr`) |
 | `thumbnails.py` | cache local des vignettes d'affichage |
+| `theme.py` | couleurs dérivées du thème Windows (clair / sombre) |
 | `tray.py` | zone de notification (icône + menu) et verrou mono-instance |
 | `autostart.py` | inscription au démarrage de Windows (clé `Run` du compte) |
 | `updater.py` | mise à jour automatique depuis les releases GitHub |

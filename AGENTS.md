@@ -53,6 +53,12 @@ presse-papiers, dans un **dossier réseau partagé**.
   (`settings_data/thumbs/`, reconstructible, jamais sur le partage). Décodage à
   la taille cible via `QImageReader.setScaledSize` : le plein format n'est jamais
   décodé pour l'affichage.
+- `theme.py` : **couleurs sémantiques déduites de la palette système** (Windows
+  clair / sombre, aucun réglage manuel). La feuille de style est appliquée à
+  `QApplication` (`theme.install`) puis **régénérée au changement de palette**
+  (`QGuiApplication.paletteChanged`) : le basculement clair ↔ sombre est suivi
+  sans redémarrage. Les surfaces volontairement noires (aperçus et plein écran
+  d'image) restent hors du thème.
 - `tray.py` : **zone de notification** (icône + menu Ouvrir / Réglages / Quitter)
   et **verrou mono-instance**. Fermer la fenêtre **réduit** l'application
   (réglage `close_to_tray`, défaut `True`) ; l'arrêt réel passe par « Quitter ».
@@ -118,6 +124,11 @@ presse-papiers, dans un **dossier réseau partagé**.
   (Pillow n'est plus utilisé) ; encodage JPEG à l'enregistrement via Qt
   (`QImageWriter`, qualité `storage.IMAGE_QUALITY` = 98 + progressif) ;
   suppression via **send2trash**.
+- **Thème** : suivre le mode clair/sombre de Windows via `theme.py`. Pas de
+  couleur codée en dur pour le texte ou les fonds d'interface : rôle de palette
+  (`QPalette`) ou règle de la feuille de style de `theme` (objectName). Seules
+  exceptions : surfaces d'image noires et couleurs sémantiques (vert
+  d'enregistrement, rouge d'édition, toast).
 - L'onglet « Consulter » n'affiche **rien par défaut** (recherche à la demande),
   pour ne pas saturer avec des milliers de cas.
 - OCR : réglage local `ocr_enabled` (défaut `True`). Le texte est dans

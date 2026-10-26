@@ -53,6 +53,7 @@ import bootstrap
 import config
 import ocr
 import storage
+import theme
 import thumbnails
 import tray
 import updater
@@ -224,7 +225,7 @@ class SettingsDialog(QDialog):
             "Compte de la session Windows, limité aux utilisateurs connus du "
             "dossier partagé (ajout automatique si inconnu)."
         )
-        name_hint.setStyleSheet("color: gray;")
+        name_hint.setObjectName("hintLabel")
         name_hint.setWordWrap(True)
         form.addRow("", name_hint)
 
@@ -806,10 +807,6 @@ FEED_PAGE = 40
 #: Distance (px) du haut/bas à partir de laquelle le palier voisin est préparé.
 FEED_PREFETCH_PX = 700
 
-#: Fond d'une carte du fil : normal, ou bleu si le cas est « nouveau » (non lu).
-FEED_CARD_BG = "#1e1e1e"
-FEED_CARD_BG_NEW = "#1b3a5c"
-
 #: Ancrages temporels du fil : (libellé, décalage). J = jours, M = mois, A = ans.
 #: Cliquer un ancrage relance le fil à partir de cet instant (remontée vers le passé).
 FEED_ANCHORS = [
@@ -851,8 +848,10 @@ def checked_case_types(boxes) -> set:
 class CaseBrowserPage(QWidget):
     """Onglet de navigation : menu d'unités (gauche) + grille de vignettes.
 
-    Le menu de gauche liste « Tous » puis les unités partagées ; la zone
-    principale affiche, triés par titre, les cas de l'unité sélectionnée.
+    Le menu de gauche liste « Tout » puis les unités partagées ; « Tout » affiche
+    les cas de toutes les unités, y compris ceux qui n'en ont aucune, et une
+    seule unité peut être sélectionnée à la fois. La zone principale affiche,
+    triés par titre, les cas correspondants.
     Une bascule en bas du menu choisit entre cas **publics** et cas **privés**
     (ces derniers limités aux cas privés de l'utilisateur courant).
     """
@@ -927,13 +926,13 @@ class CaseBrowserPage(QWidget):
 
         # Filtre « Type de cas » (3 cases à cocher), au-dessus de la bascule.
         types_box = QWidget()
+        types_box.setObjectName("panelTop")
         types_box.setAttribute(Qt.WA_StyledBackground, True)
-        types_box.setStyleSheet("border-top: 1px solid #444;")
         types_layout = QVBoxLayout(types_box)
         types_layout.setContentsMargins(6, 6, 6, 6)
         types_layout.setSpacing(2)
         types_title = QLabel("Type de cas")
-        types_title.setStyleSheet("color:#bbb; font-weight:bold;")
+        types_title.setObjectName("sectionTitle")
         types_layout.addWidget(types_title)
         self.case_type_checkboxes = make_case_type_checkboxes()
         for cb in self.case_type_checkboxes:
@@ -943,8 +942,8 @@ class CaseBrowserPage(QWidget):
 
         # Bascule « Cas publics » / « Cas privés », ancrée en bas du menu.
         switch = QWidget()
+        switch.setObjectName("panelTop")
         switch.setAttribute(Qt.WA_StyledBackground, True)
-        switch.setStyleSheet("border-top: 1px solid #444;")
         switch_layout = QHBoxLayout(switch)
         switch_layout.setContentsMargins(6, 6, 6, 6)
         switch_layout.setSpacing(0)
@@ -956,13 +955,9 @@ class CaseBrowserPage(QWidget):
             (storage.VISIBILITY_PRIVATE, "👤 Privés"),
         ):
             button = QPushButton(label)
+            button.setObjectName("toggleButton")
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
-            button.setStyleSheet(
-                "QPushButton{border:1px solid #555; padding:6px 4px; background:transparent;}"
-                "QPushButton:hover{background:#2f2f2f;}"
-                "QPushButton:checked{background:#3a5a8c; color:white; font-weight:bold;}"
-            )
             button.clicked.connect(lambda _checked, v=value: self._set_visibility(v))
             self.visibility_group.addButton(button)
             self.visibility_buttons[value] = button
@@ -998,19 +993,27 @@ class CaseBrowserPage(QWidget):
             self._unit_group.removeButton(button)
 
         self._unit_buttons = {}
+        # Entrée « Tout » en tête : aucun filtre d'unité (les cas sans unité
+        # restent donc visibles). Clé "" dans ``_unit_buttons`` = toutes.
+        everything = QPushButton("Tout")
+        everything.setObjectName("menuButton")
+        everything.setCheckable(True)
+        everything.setCursor(Qt.PointingHandCursor)
+        everything.setToolTip("Afficher les cas de toutes les unités, y compris ceux sans unité.")
+        everything.clicked.connect(lambda _checked: self._select_unit(None))
+        self._unit_group.addButton(everything)
+        self._unit_buttons[""] = everything
+        self.menu_layout.addWidget(everything)
+        self.menu_layout.addSpacing(6)  # sépare « Tout » de la liste des unités
         entries = [
             (u["name"], f"{u['emoji']}  {u['name']}" if u.get("emoji") else u["name"])
             for u in bootstrap.load_units(self.settings.shared_root)
         ]
         for value, label in entries:
             button = QPushButton(label)
+            button.setObjectName("menuButton")
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
-            button.setStyleSheet(
-                "QPushButton{text-align:left; padding:6px 8px; border:none; border-radius:4px;}"
-                "QPushButton:hover{background:#2f2f2f;}"
-                "QPushButton:checked{background:#3a5a8c; color:white; font-weight:bold;}"
-            )
             button.clicked.connect(lambda _checked, v=value: self._select_unit(v))
             self._unit_group.addButton(button)
             self._unit_buttons[value] = button
@@ -1022,20 +1025,22 @@ class CaseBrowserPage(QWidget):
         if desired is not None and desired not in self._unit_buttons:
             desired = None  # unité mémorisée disparue : on revient à « toutes »
         self._selected_unit = desired
-        if self._selected_unit is not None:
-            self._unit_buttons[self._selected_unit].setChecked(True)
+        # « Tout » est coché quand aucune unité n'est mémorisée : l'état de la vue
+        # est ainsi toujours lisible, y compris au premier lancement.
+        self._unit_buttons[self._selected_unit or ""].setChecked(True)
 
     def _select_unit(self, value) -> None:
-        """Sélectionne une unité (mémorisée) ; re-cliquer revient à toutes les unités."""
+        """Sélectionne une unité (``None`` = « Tout ») et rafraîchit la grille."""
         if value == self._selected_unit:
-            value = None  # re-clic sur l'unité courante → toutes les unités
+            return
         self._selected_unit = value
         self.settings.last_browser_unit = value or ""
         config.save_settings(self.settings)
-        # État visuel des boutons : un seul coché (ou aucun).
+        # État visuel des boutons : un seul coché, « Tout » compris.
+        selected = value or ""
         self._unit_group.setExclusive(False)
         for name, button in self._unit_buttons.items():
-            button.setChecked(name == value)
+            button.setChecked(name == selected)
         self._unit_group.setExclusive(True)
         self.reload_cases()
 
@@ -1098,7 +1103,7 @@ class CaseBrowserPage(QWidget):
         if not cases:
             empty = QLabel("Aucun cas à afficher.")
             empty.setAlignment(Qt.AlignCenter)
-            empty.setStyleSheet("color:#888; padding:24px;")
+            empty.setObjectName("emptyState")
             self._empty_label = empty
             self._layout_cards(force=True)
             return
@@ -1190,7 +1195,7 @@ class CaseBrowserPage(QWidget):
         pixmap = thumbnails.load_thumbnail(case, CARD_IMG_W, CARD_IMG_H)
         if pixmap.isNull():
             thumb.setText("—")
-            thumb.setStyleSheet("background-color:#1e1e1e; color:#777;")
+            thumb.setStyleSheet("background-color:black; color:#999;")
         else:
             thumb.setPixmap(pixmap)
         column.addWidget(thumb, 0, Qt.AlignHCenter)
@@ -1371,7 +1376,7 @@ class FeedView(QWidget):
         if not cases:
             empty = QLabel("Aucun cas à afficher.")
             empty.setAlignment(Qt.AlignCenter)
-            empty.setStyleSheet("color:#888; padding:24px;")
+            empty.setObjectName("emptyState")
             self.vbox.addWidget(empty)
             self.vbox.addStretch()
             self._pending_scroll_widget = None
@@ -1566,13 +1571,13 @@ class FeedView(QWidget):
 
         def line() -> QFrame:
             bar = QFrame()
+            bar.setObjectName("feedSeparator")
             bar.setFrameShape(QFrame.NoFrame)
             bar.setFixedHeight(1)
-            bar.setStyleSheet("background:#555;")
             return bar
 
         label = QLabel(text)
-        label.setStyleSheet("color:#bbb; font-weight:bold;")
+        label.setObjectName("feedDate")
         row.addWidget(line(), 1)
         row.addWidget(label)
         row.addWidget(line(), 1)
@@ -1597,7 +1602,8 @@ class FeedView(QWidget):
         meta = QLabel(_feed_meta_text(case, self._unit_emoji))
         meta.setWordWrap(True)
         meta.setFixedWidth(FEED_IMG_W)
-        meta.setStyleSheet("color:#b3bac1; font-size:12px;")
+        meta.setObjectName("feedMeta")
+        meta.setStyleSheet("font-size:12px;")
         column.addWidget(meta)
 
         image = ClickableLabel()
@@ -1610,7 +1616,7 @@ class FeedView(QWidget):
         pixmap = thumbnails.load_thumbnail(case, FEED_IMG_W, FEED_IMG_H)
         if pixmap.isNull():
             image.setText("—")
-            image.setStyleSheet("background:#111; color:#777; border-radius:6px;")
+            image.setStyleSheet("background:#111; color:#999; border-radius:6px;")
         else:
             image.setPixmap(pixmap)
         column.addWidget(image, 0, Qt.AlignHCenter)
@@ -1618,7 +1624,7 @@ class FeedView(QWidget):
         title = QLabel(case.title)
         title.setWordWrap(True)
         title.setFixedWidth(FEED_IMG_W)
-        title.setStyleSheet("font-weight:bold; font-size:15px; color:#fff;")
+        title.setStyleSheet("font-weight:bold; font-size:15px;")
         column.addWidget(title)
 
         description = case.description.strip()
@@ -1626,7 +1632,6 @@ class FeedView(QWidget):
             body = QLabel(description)
             body.setWordWrap(True)
             body.setFixedWidth(FEED_IMG_W)
-            body.setStyleSheet("color:#ddd;")
             column.addWidget(body)
         return card
 
@@ -1637,8 +1642,14 @@ class FeedView(QWidget):
 
     @staticmethod
     def _apply_card_style(card: QFrame, *, unread: bool) -> None:
-        background = FEED_CARD_BG_NEW if unread else FEED_CARD_BG
-        card.setStyleSheet(f"#feedCard{{background:{background}; border-radius:10px;}}")
+        """Bascule la carte entre « normale » et « nouvelle » (règle de thème)."""
+        name = "feedCardNew" if unread else "feedCard"
+        if card.objectName() == name:
+            return
+        card.setObjectName(name)
+        card.style().unpolish(card)
+        card.style().polish(card)
+        card.update()
 
 
 # --------------------------------------------------------------------------- #
@@ -1771,7 +1782,7 @@ class MainWindow(QMainWindow):
         # Version affichée en bas à droite : utile pour savoir d'un coup d'œil
         # quelle version tourne sur un poste.
         self.version_label = QLabel(updater.display_version())
-        self.version_label.setStyleSheet("color: gray;")
+        self.version_label.setObjectName("hintLabel")
         self.version_label.setToolTip("Version de RadCase Manager")
         bar.addPermanentWidget(self.version_label)
         # Indicateur persistant quand une version plus récente est connue : il
@@ -1779,7 +1790,7 @@ class MainWindow(QMainWindow):
         # proposition.
         self.update_label = ClickableLabel()
         self.update_label.setCursor(Qt.PointingHandCursor)
-        self.update_label.setStyleSheet("color:#e6a23c; font-weight:bold;")
+        self.update_label.setObjectName("updateLabel")
         self.update_label.clicked.connect(lambda: self.check_updates())
         self.update_label.hide()
         bar.addPermanentWidget(self.update_label)
@@ -2073,7 +2084,8 @@ class MainWindow(QMainWindow):
         top_layout.setSpacing(0)
 
         units_title = QLabel("Sélection des unités")
-        units_title.setStyleSheet("color:#bbb; font-weight:bold; padding:6px 6px 2px 6px;")
+        units_title.setObjectName("sectionTitle")
+        units_title.setStyleSheet("padding:6px 6px 2px 6px;")
         top_layout.addWidget(units_title)
 
         # Boutons « tout cocher » puis « tout décocher », juste sous le titre.
@@ -2109,14 +2121,15 @@ class MainWindow(QMainWindow):
         # sans étirement, reste donc déployée au maximum et n'est comprimée —
         # avec ascenseur — qu'une fois la temporalité réduite au minimum.
         bottom = _NaturalHeightPanel()
+        bottom.setObjectName("panelTop")
         bottom.setAttribute(Qt.WA_StyledBackground, True)
-        bottom.setStyleSheet("border-top: 1px solid #444;")
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(6, 6, 6, 6)
         bottom_layout.setSpacing(4)
 
         temporalite_title = QLabel("Temporalité")
-        temporalite_title.setStyleSheet("color:#bbb; font-weight:bold; padding:0 0 2px 0;")
+        temporalite_title.setObjectName("sectionTitle")
+        temporalite_title.setStyleSheet("padding:0 0 2px 0;")
         bottom_layout.addWidget(temporalite_title)
 
         anchors_scroll = QScrollArea()
@@ -2146,13 +2159,14 @@ class MainWindow(QMainWindow):
 
         # --- Zone basse : filtre « Type de cas » (3 cases à cocher) ---
         feed_types_box = QWidget()
+        feed_types_box.setObjectName("panelTop")
         feed_types_box.setAttribute(Qt.WA_StyledBackground, True)
-        feed_types_box.setStyleSheet("border-top: 1px solid #444;")
         feed_types_layout = QVBoxLayout(feed_types_box)
         feed_types_layout.setContentsMargins(6, 6, 6, 6)
         feed_types_layout.setSpacing(2)
         feed_types_title = QLabel("Type de cas")
-        feed_types_title.setStyleSheet("color:#bbb; font-weight:bold; padding:0 0 2px 0;")
+        feed_types_title.setObjectName("sectionTitle")
+        feed_types_title.setStyleSheet("padding:0 0 2px 0;")
         feed_types_layout.addWidget(feed_types_title)
         self.feed_case_type_checkboxes = make_case_type_checkboxes()
         for cb in self.feed_case_type_checkboxes:
@@ -2302,7 +2316,7 @@ class MainWindow(QMainWindow):
 
         self.clipboard_hint = QLabel("")
         self.clipboard_hint.setWordWrap(True)
-        self.clipboard_hint.setStyleSheet("color: #2e7d32;")
+        self.clipboard_hint.setObjectName("clipboardHint")
         left.addWidget(self.clipboard_hint)
         left.addStretch()
 
@@ -2587,12 +2601,11 @@ class MainWindow(QMainWindow):
         page = QWidget()
         page.setObjectName("editPage")
         page.setAttribute(Qt.WA_StyledBackground, True)
-        # Indicateur visuel : fond chaud sombre, discret (sans agressivité).
-        page.setStyleSheet("#editPage { background-color: #3b2f2f; }")
+        # Fond chaud discret, dérivé du thème (voir ``theme.edit_background``).
 
         outer = QVBoxLayout(page)
         header = QLabel("✏️  Édition d'un cas existant")
-        header.setStyleSheet("color: #e6cccc; font-weight: bold; font-size: 14px;")
+        header.setStyleSheet("font-weight: bold; font-size: 14px;")
         outer.addWidget(header)
 
         content = QHBoxLayout()
@@ -2604,7 +2617,7 @@ class MainWindow(QMainWindow):
         self.edit_preview = QLabel("Aucune image.")
         self.edit_preview.setAlignment(Qt.AlignCenter)
         self.edit_preview.setAttribute(Qt.WA_StyledBackground, True)
-        self.edit_preview.setStyleSheet("background-color: black; color: #777;")
+        self.edit_preview.setStyleSheet("background-color: black; color: #999;")
         self.edit_preview.setFixedSize(PREVIEW_W, PREVIEW_H)
         left.addWidget(self.edit_preview)
 
@@ -3856,6 +3869,7 @@ def main() -> int:
 
     _set_windows_app_id()
     app = QApplication(sys.argv)
+    theme.install(app)
     app.setWindowIcon(_app_icon())
     # La fermeture de la fenêtre peut se contenter de réduire l'application dans
     # la zone de notification : c'est alors « Quitter » qui arrête le processus
