@@ -190,6 +190,17 @@ partagé réseau (2000+ cas visés).
   fenêtre visible (paliers `BROWSER_PAGE` / `FEED_PAGE`), complétée au fil du
   défilement (remontée de l'historique pour le fil). La mémoire reste bornée,
   indépendamment du nombre de cas.
+- **Vie du Fil ouvert** (`FEED_BADGE_INTERVAL_MS`, 2 min) : le même passage
+  périodique qui met à jour le badge et l'alerte du tray **ajoute** au Fil les cas
+  arrivés depuis le dernier passage (`FeedView.append_cases`). L'insertion est
+  **incrémentale** : seules les cartes manquantes sont construites, jamais de
+  `load()` complet — sinon la vue se ré-ancrerait sur la date du jour et la
+  lecture sauterait. Le défilement n'est pas déplacé si l'on lit plus haut (une
+  pastille « ↓ N nouveaux cas », `QPushButton#feedNewPill`, permet de rejoindre le
+  bas) ; si l'on était déjà collé au bas, on y reste et les cas arrivent sous les
+  yeux. Au retour depuis la zone de notification, un passage immédiat est fait
+  (`restore_from_tray`). Aucune surveillance de fichiers : le dossier partagé est
+  réseau, le sondage périodique passe par l'anti-rebond de l'index.
 - **Recherche rapide** (Bibliothèque) : anti-rebond `QUICK_SEARCH_DEBOUNCE_MS`,
   pour ne pas reconstruire la grille à chaque frappe.
 

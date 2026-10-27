@@ -115,6 +115,12 @@ presse-papiers, dans un **dossier réseau partagé**.
 - `main_gui.py` : interface PySide6 (onglets « Nouveau cas » / « Consulter »).
   Bibliothèque et Fil en **chargement progressif** (seule la fenêtre visible est
   construite) ; recherche rapide avec anti-rebond.
+  Le **Fil ouvert se met à jour tout seul** : le passage périodique
+  (`FEED_BADGE_INTERVAL_MS`, 2 min) qui met à jour le badge ajoute les cas arrivés
+  (`FeedView.append_cases`, insertion **incrémentale** — pas de `load()` complet,
+  qui ré-ancrerait la vue sur la date du jour). Le défilement n'est pas déplacé si
+  l'on lit plus haut (pastille « ↓ N nouveaux cas ») ; collé au bas, on y reste ;
+  au retour depuis la zone de notification, un passage immédiat est fait.
   Création et édition passent par `SaveCaseWorker` / `UpdateCaseWorker` dans un
   `QThread` : l'OCR et l'écriture disque ne figent pas l'interface. Un seul
   enregistrement à la fois ; l'arrêt est différé si un worker tourne.

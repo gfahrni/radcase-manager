@@ -228,6 +228,11 @@ Conçue pour rester fluide avec des **milliers de cas** sur un dossier réseau :
   localement (`settings_data/thumbs/`, reconstructible, hors du partage) ;
 - la Bibliothèque et le Fil ne construisent que la **fenêtre visible** et
   complètent au défilement (mémoire bornée) ;
+- le **Fil d'actualité** se complète tout seul : toutes les 2 minutes, les cas
+  arrivés dans les unités suivies sont **ajoutés en bas**, sans reconstruire la
+  vue ni déplacer la lecture. Si vous êtes déjà en bas, ils apparaissent
+  directement ; sinon une pastille **« ↓ N nouveaux cas »** vous invite à les
+  rejoindre (un clic ramène au plus récent) ;
 - l'index local n'est scanné qu'**une fois par rafale** de lectures (anti-rebond),
   et les auteurs/unités sont lus par requête SQL ciblée.
 

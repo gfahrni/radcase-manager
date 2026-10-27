@@ -66,7 +66,9 @@ FEED_DOT_EMOJI = "⚪"
 FEED_DOT_NOTIFY = "🔵"
 
 #: Intervalle de vérification du badge de nouveauté du fil (millisecondes).
-FEED_BADGE_INTERVAL_MS = 5 * 60 * 1000
+#: Sert aussi de période de rafraîchissement **incrémental** du Fil ouvert :
+#: les cas arrivés entre deux passages sont ajoutés sans reconstruire la vue.
+FEED_BADGE_INTERVAL_MS = 2 * 60 * 1000
 
 #: Reprendre le titre du cas dans la bannière système (voir
 #: ``MainWindow._notify_new_cases``). Le mettre à ``False`` donne une bannière
@@ -806,6 +808,13 @@ FEED_IMG_W, FEED_IMG_H = 387, 267
 FEED_PAGE = 40
 #: Distance (px) du haut/bas à partir de laquelle le palier voisin est préparé.
 FEED_PREFETCH_PX = 700
+#: Tolérance (px) pour considérer que le fil est « en bas » (collé au plus récent).
+#: Sert au rafraîchissement incrémental : en bas, les nouveaux cas s'affichent
+#: directement ; plus haut, ils s'ajoutent sans déplacer la lecture et une
+#: pastille signale leur arrivée.
+FEED_STICK_PX = 8
+#: Marge (px) entre la pastille « ↓ N nouveaux cas » et le bas du fil.
+FEED_PILL_MARGIN = 16
 
 #: Ancrages temporels du fil : (libellé, décalage). J = jours, M = mois, A = ans.
 #: Cliquer un ancrage relance le fil à partir de cet instant (remontée vers le passé).
@@ -1291,12 +1300,28 @@ class FeedView(QWidget):
         self._win_start = 0                 # borne basse de la fenêtre construite
         self._win_end = 0                   # borne haute (exclue)
         self._extending = False             # garde anti-réentrance (extension)
+        # Filtres du dernier chargement : nécessaires pour insérer les cas
+        # arrivés entre deux passages (mêmes unités, mêmes types).
+        self._units_filter = None           # None = toutes les unités
+        self._types_filter = None           # None = tous les types
+        self._anchor = None                 # instant d'ancrage du dernier load
+        self._latest_cases = None           # dernière liste fraîche reçue
+        self._pending_new = 0               # cartes arrivées hors de la vue
         self.scroll.verticalScrollBar().rangeChanged.connect(self._on_range_changed)
         self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.scroll)
+
+        # Pastille flottante « ↓ N nouveaux cas » : visible seulement quand des
+        # cartes sont arrivées alors que l'utilisateur ne lisait pas le bas du
+        # fil. Un clic ramène à la carte la plus récente.
+        self._new_pill = QPushButton("", self)
+        self._new_pill.setObjectName("feedNewPill")
+        self._new_pill.setCursor(Qt.PointingHandCursor)
+        self._new_pill.setVisible(False)
+        self._new_pill.clicked.connect(self._jump_to_latest)
 
     def showEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
         """Repositionne le fil quand l'onglet devient visible (layout prêt)."""
@@ -1353,6 +1378,11 @@ class FeedView(QWidget):
         self._unread_ids = set(unread_ids or ())
         self._seen_ids = set()
         self._cards_by_id = {}
+        self._anchor = anchor
+        self._units_filter = list(units) if units is not None else None
+        self._types_filter = set(case_types) if case_types is not None else None
+        self._pending_new = 0
+        self._new_pill.hide()
         self._clear_view()
 
         if cases is None:
@@ -1501,11 +1531,152 @@ class FeedView(QWidget):
             self.vbox.insertWidget(stretch_index + offset, widget, 0, Qt.AlignHCenter)
         self._win_end = new_end
 
+    # --- Cas arrivés pendant la consultation (ajout incrémental) ----------- #
+    def append_cases(self, cases, unread_ids=None) -> int:
+        """Ajoute en bas les cas absents du fil, sans reconstruire la vue.
+
+        ``cases`` : liste complète et fraîche des cas visibles ; les cartes déjà
+        présentes sont ignorées, les filtres du dernier :meth:`load` (unités
+        suivies, types de cas) sont réappliqués.
+
+        Retourne le nombre de cartes ajoutées. Le défilement n'est **pas**
+        déplacé quand on lit plus haut : les cartes s'ajoutent sous la zone
+        visible et la pastille « ↓ N nouveaux cas » apparaît. Si on était déjà en
+        bas, on y reste — les cas arrivent sous les yeux, comme dans un fil.
+        """
+        if unread_ids:
+            self._unread_ids |= set(unread_ids)
+        self._latest_cases = list(cases)
+        known = {case.id for case in self._cases}
+        fresh = self._apply_filters([c for c in cases if c.id not in known])
+        if not fresh:
+            return 0
+        fresh.sort(key=lambda case: case.date_added or "")  # ancien → récent
+
+        if not self._cases:
+            # Fil vide (état « Aucun cas à afficher ») : rien à préserver, on
+            # reconstruit autour de l'ancrage courant (le cas neuf est donc à
+            # l'écran, comme après une ouverture de l'onglet).
+            self.load(
+                self._anchor,
+                units=self._units_filter,
+                unread_ids=self._unread_ids,
+                case_types=self._types_filter,
+                cases=cases,
+            )
+            return len(fresh)
+
+        bar = self.scroll.verticalScrollBar()
+        # « En bas » ne suffit pas : si le fil est ancré dans le passé, le bas de
+        # la vue n'est pas le bas du fil (des cartes plus récentes restent à
+        # construire) — on ne déplace alors pas la lecture, on pose la pastille.
+        at_bottom = (
+            bar.value() >= bar.maximum() - FEED_STICK_PX
+            and self._win_end >= len(self._cases)
+        )
+        start = len(self._cases)
+        self._cases.extend(fresh)  # la liste doit être complète avant _build_range
+        # Un palier au plus : si le fil est ancré loin du présent, les cas
+        # intermédiaires restent à construire par le défilement (``_maybe_extend``).
+        end = min(len(self._cases), start + FEED_PAGE)
+        block = self._build_range(start, end)
+        stretch_index = self.vbox.count() - 1  # dernier item = étirement final
+        for offset, widget in enumerate(block):
+            self.vbox.insertWidget(stretch_index + offset, widget, 0, Qt.AlignHCenter)
+        self._win_end = end
+        if at_bottom:
+            # La plage de défilement n'est recalculée qu'après la pose du layout :
+            # on réessaie brièvement pour rester collé au bas.
+            self._scroll_to_latest()
+        else:
+            self._show_pill(len(fresh))
+        return len(fresh)
+
+    def _apply_filters(self, cases: list) -> list:
+        """Réapplique les filtres du dernier :meth:`load` à une liste de cas."""
+        if self._units_filter is not None:
+            wanted = {unit.casefold() for unit in self._units_filter}
+            cases = [c for c in cases if wanted & {u.casefold() for u in c.units}]
+        if self._types_filter is not None:
+            cases = [c for c in cases if c.case_type in self._types_filter]
+        return cases
+
+    def _scroll_to_latest(self) -> None:
+        """Colle le fil sur la carte la plus récente et efface la pastille."""
+        self._stick_latest(0, None)
+        self._clear_pill()
+
+    def _stick_latest(self, attempt: int, expected: int | None) -> None:
+        """Applique le bas du fil, en réessayant tant que la plage s'ajuste.
+
+        ``expected`` : position visée au passage précédent. Si l'utilisateur a
+        défilé entre-temps, on s'arrête (on ne le ramène jamais de force).
+        """
+        bar = self.scroll.verticalScrollBar()
+        if expected is not None and abs(bar.value() - expected) > FEED_STICK_PX:
+            return
+        bar.setValue(bar.maximum())
+        target = bar.maximum()
+        if attempt < 3:
+            QTimer.singleShot(30, lambda: self._stick_latest(attempt + 1, target))
+
+    def _jump_to_latest(self) -> None:
+        """Clic sur la pastille : rejoint la carte la plus récente."""
+        if self._win_end < len(self._cases):
+            # Le bas de la vue n'est pas le bas du fil (ancrage dans le passé).
+            # Se ré-ancrer sur le présent coûte une fenêtre de cartes, alors que
+            # construire tous les cas intermédiaires en coûterait des centaines.
+            from datetime import datetime
+
+            self.load(
+                datetime.now(),
+                units=self._units_filter,
+                unread_ids=self._unread_ids,
+                case_types=self._types_filter,
+                cases=self._latest_cases or self._cases,
+            )
+            return
+        QTimer.singleShot(0, self._scroll_to_latest)
+
+    def _show_pill(self, added: int) -> None:
+        """Affiche/cumule la pastille des cas arrivés hors de la zone visible."""
+        self._pending_new += added
+        count = self._pending_new
+        self._new_pill.setText(
+            "↓ 1 nouveau cas" if count == 1 else f"↓ {count} nouveaux cas"
+        )
+        self._place_pill()
+        self._new_pill.raise_()
+        self._new_pill.show()
+
+    def _clear_pill(self) -> None:
+        """Masque la pastille et remet son compteur à zéro."""
+        self._pending_new = 0
+        self._new_pill.hide()
+
+    def _place_pill(self) -> None:
+        """Centre la pastille en bas de la zone du fil."""
+        pill = getattr(self, "_new_pill", None)
+        if pill is None:
+            return
+        pill.adjustSize()
+        x = (self.width() - pill.width()) // 2
+        y = self.height() - pill.height() - FEED_PILL_MARGIN
+        pill.move(max(0, x), max(0, y))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        super().resizeEvent(event)
+        self._place_pill()
+
     # --- Cas « nouveaux » (fond bleu) ------------------------------------- #
     def _on_scroll(self, _value: int) -> None:
         """À chaque défilement : marque lues les cartes vues et prépare la suite."""
         self._mark_visible_read()
         self._maybe_extend()
+        if self._new_pill.isVisible():
+            bar = self.scroll.verticalScrollBar()
+            if bar.value() >= bar.maximum() - FEED_STICK_PX:
+                self._clear_pill()  # revenu en bas : les cartes sont vues
 
     def _mark_visible_read(self) -> None:
         """Marque lues les cartes « nouvelles » déjà vues puis sorties de l'écran.
@@ -1741,10 +1912,11 @@ class MainWindow(QMainWindow):
         if single_instance is not None:
             single_instance.activated.connect(self.restore_from_tray)
 
-        # Badge de nouveauté du fil : vérification périodique (toutes les 5 min).
+        # Badge de nouveauté du fil + rafraîchissement incrémental du Fil ouvert :
+        # vérification périodique (toutes les 2 min).
         self._feed_timer = QTimer(self)
         self._feed_timer.setInterval(FEED_BADGE_INTERVAL_MS)
-        self._feed_timer.timeout.connect(self._update_feed_badge)
+        self._feed_timer.timeout.connect(self._on_feed_tick)
         self._feed_timer.start()
         self._update_feed_badge(getattr(self, "_feed_cases", None))
 
@@ -1890,6 +2062,36 @@ class MainWindow(QMainWindow):
         count = len(self._unread_cases(cases))
         self.set_feed_dot(FEED_DOT_NOTIFY if count else FEED_DOT_EMOJI, count)
         self._update_tray_alert(cases)
+
+    def _on_feed_tick(self) -> None:
+        """Passage périodique : badge de nouveauté + vie du Fil s'il est ouvert.
+
+        Un **seul** chargement de l'index pour les trois usages (compteur
+        d'onglet, alerte du tray, ajout incrémental), et jamais de reconstruction
+        du Fil : les cartes arrivées entre deux passages sont ajoutées sans
+        déplacer la lecture (voir :meth:`FeedView.append_cases`).
+        """
+        cases = self._load_visible_cases()
+        self._feed_cases = cases
+        self._update_feed_badge(cases)
+        self._sync_open_feed(cases)
+
+    def _sync_open_feed(self, cases) -> None:
+        """Ajoute au Fil **visible** les cas arrivés depuis le dernier passage.
+
+        Inutile de travailler quand l'onglet n'est pas affiché : à son ouverture,
+        ``_refresh_feed`` reconstruit tout de toute façon. On ne touche pas non
+        plus à la vue quand la fenêtre est masquée ou réduite (l'utilisateur ne
+        la voit pas ; l'alerte du tray, elle, est déjà mise à jour).
+        """
+        if not hasattr(self, "feed_view"):
+            return  # onglet jamais construit (chargement progressif)
+        if not self.isVisible() or self.isMinimized():
+            return
+        if self.tabs.currentIndex() != self.feed_tab_index:
+            return
+        unread = {case.id for case in self._unread_cases(cases)}
+        self.feed_view.append_cases(cases, unread_ids=unread)
 
     def _update_tray_alert(self, cases=None) -> None:
         """Pastille rouge de l'icône de notification : « du nouveau depuis la visite ».
@@ -3535,6 +3737,11 @@ class MainWindow(QMainWindow):
             self.show()
         self.raise_()
         self.activateWindow()
+        # Retour depuis la zone de notification : le Fil a pu vieillir pendant
+        # que la fenêtre était masquée (les ticks ne touchent pas à la vue). Un
+        # passage immédiat évite d'attendre le prochain tick périodique.
+        if self.tabs.currentIndex() == self.feed_tab_index:
+            self._on_feed_tick()
 
     def _open_settings_from_tray(self) -> None:
         """Ouvre les réglages depuis l'icône : la fenêtre revient d'abord."""

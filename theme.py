@@ -97,6 +97,11 @@ def stylesheet() -> str:
     highlight = _color(QPalette.Highlight).name()
     highlighted_text = _color(QPalette.HighlightedText).name()
     muted = muted_text().name()
+    # Survol de la pastille « ↓ N nouveaux cas » : accent légèrement rabattu
+    # vers le fond de fenêtre, lisible dans les deux modes.
+    pill_hover = blend(
+        _color(QPalette.Highlight), _color(QPalette.Window), 0.18
+    ).name()
     return f"""
 QWidget#panelTop {{ border-top: 1px solid {border().name()}; }}
 QLabel#sectionTitle {{ color: {muted}; font-weight: bold; }}
@@ -120,6 +125,10 @@ QFrame#feedCard {{ background-color: {card_background().name()}; border-radius: 
 QFrame#feedCardNew {{ background-color: {new_card_background().name()};
                       border-radius: 10px; }}
 QFrame#feedSeparator {{ background: {border().name()}; }}
+QPushButton#feedNewPill {{ background-color: {highlight}; color: {highlighted_text};
+                           border: none; border-radius: 12px; padding: 6px 14px;
+                           font-weight: bold; }}
+QPushButton#feedNewPill:hover {{ background-color: {pill_hover}; }}
 QWidget#editPage {{ background-color: {edit_background().name()}; }}
 """
 
