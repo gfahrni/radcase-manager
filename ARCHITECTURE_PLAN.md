@@ -213,7 +213,7 @@ fenêtre affichée.
 
 | Module | Rôle |
 |---|---|
-| `config.py` | réglages locaux (`settings.json`), chemins ; dossier partagé par défaut `N:/RAD/COMMUN/radcase-manager/DATABASE-RAD-CHUV` |
+| `config.py` | réglages locaux (`settings.json`), chemins ; **aucun dossier partagé par défaut** (chemin obligatoire, choisi au premier lancement) |
 | `bootstrap.py` | crée `cases/`, `units.json`, `users.json`, `README.md` si absents |
 | `storage.py` | `create_case()`, `list_cases()`, `search_cases()` + index local |
 | `ocr.py` | OCR natif Windows (`Windows.Media.Ocr`) dans un thread dédié, best-effort |

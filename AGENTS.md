@@ -22,10 +22,9 @@ presse-papiers, dans un **dossier réseau partagé**.
 - **Pas de SQLite** (choix délibéré) : les cas sont **figés** (append-only), donc
   écriture dans un dossier temporaire `.tmp_<id>` puis `os.rename` **atomique**.
 - Réglages locaux **par utilisateur système** dans `settings_data/settings.json`,
-  sous `%LOCALAPPDATA%\RadCaseManager\` (Windows) ; jamais sur le partage. Le
-  dossier partagé proposé par défaut est
-  `N:/RAD/COMMUN/radcase-manager/DATABASE-RAD-CHUV` (`config.DEFAULT_SHARED_ROOT`),
-  modifiable dans les réglages. Le nom
+  sous `%LOCALAPPDATA%\RadCaseManager\` (Windows) ; jamais sur le partage.
+  **Aucun dossier partagé par défaut** : le chemin est obligatoire et choisi au
+  premier lancement (dialogue de réglages), puis modifiable. Le nom
   d'auteur est celui du **compte de session Windows** (nom de connexion) ; il est
   ajouté automatiquement à `users.json` et choisi uniquement parmi les
   utilisateurs connus (pas de saisie libre).
@@ -124,6 +123,13 @@ presse-papiers, dans un **dossier réseau partagé**.
   Création et édition passent par `SaveCaseWorker` / `UpdateCaseWorker` dans un
   `QThread` : l'OCR et l'écriture disque ne figent pas l'interface. Un seul
   enregistrement à la fois ; l'arrêt est différé si un worker tourne.
+  **Sous Windows**, l'icône du bouton de la barre des tâches est posée
+  explicitement (`WM_SETICON` **et** icônes de classe `GCLP_HICON` /
+  `GCLP_HICONSM`, voir `_apply_windows_taskbar_icon`) au premier affichage :
+  l'`AppUserModelID` explicite fait chercher à Windows 11 une ressource d'icône
+  qui n'existe pas pour un exécutable portable, et sans icône de classe il
+  affiche une **page blanche** alors que le tray et la barre de titre restent
+  corrects. Ne pas retirer cette pose d'icônes.
 
 ## Conventions
 - GUI en **PySide6** ; frontmatter en **PyYAML** ; capture image via **QClipboard**

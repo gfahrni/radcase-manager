@@ -32,9 +32,9 @@ partagé**.
   dans `case.md` (`request_number`), affiché à droite du titre dans le plein
   écran et dans la Recherche Avancée, et exporté dans une colonne dédiée. Il
   est prérempli et corrigeable dans l'onglet Édition.
-- **Dossier partagé par défaut (Windows)** :
-  `N:/RAD/COMMUN/radcase-manager/DATABASE-RAD-CHUV`, modifiable dans les
-  réglages.
+- **Aucun dossier partagé par défaut** : le chemin est **obligatoire** et choisi
+  au premier lancement (dialogue de réglages), puis modifiable. Aucun chemin
+  réseau propre à un site n'est prérempli.
 - **Visibilité** : chaque cas est `public` (défaut) ou `privé`. Un cas privé
   n'apparaît dans la recherche que pour son auteur.
 - **Réglages locaux** dans `settings_data/settings.json`, dans le profil de

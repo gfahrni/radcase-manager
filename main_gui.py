@@ -2176,6 +2176,21 @@ class MainWindow(QMainWindow):
         if hasattr(self, "feed_tab_index"):
             self.tabs.setCurrentIndex(self.feed_tab_index)
 
+    def showEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
+        """Pose l'icône du bouton de la barre des tâches (Windows).
+
+        Le handle natif n'existe qu'à l'affichage : c'est le seul moment où
+        l'icône de **classe** de fenêtre peut être posée. Une seconde pose
+        différée couvre le bouton qu'Explorer crée juste après l'affichage
+        (voir :func:`_apply_windows_taskbar_icon`).
+        """
+        super().showEvent(event)
+        if sys.platform != "win32" or getattr(self, "_taskbar_icon_applied", False):
+            return
+        self._taskbar_icon_applied = True
+        _apply_windows_taskbar_icon(self)
+        QTimer.singleShot(250, lambda: _apply_windows_taskbar_icon(self))
+
     # --- Synchronisation ponctuelle du presse-papiers (activation / onglet) ---
     def changeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
         """Détecte le retour au premier plan de la fenêtre."""
@@ -4019,6 +4034,24 @@ class MainWindow(QMainWindow):
             self._apply_update()
 
 
+def _app_icon_source() -> Path | None:
+    """Fichier ``.ico`` livré avec l'application, s'il est disponible.
+
+    - binaire « frozen » : l'icône ``.ico`` est embarquée par PyInstaller via
+      ``datas`` et extraite dans ``sys._MEIPASS`` (mode « onefile ») ;
+    - en développement : fichier ``icone_radcasemanager.ico`` à la racine.
+    """
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "icone_radcasemanager.ico")
+    candidates.append(Path(__file__).resolve().parent / "icone_radcasemanager.ico")
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
 def _app_icon() -> QIcon:
     """Icône de l'application (barre de titre + barre des tâches).
 
@@ -4028,17 +4061,11 @@ def _app_icon() -> QIcon:
     - en dernier recours (Windows), l'icône gravée dans l'exécutable est lue
       directement, sans dépendre d'un fichier livré à côté.
     """
-    candidates = []
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        candidates.append(Path(meipass) / "icone_radcasemanager.ico")
-    candidates.append(Path(__file__).resolve().parent / "icone_radcasemanager.ico")
-
-    for path in candidates:
-        if path.exists():
-            icon = QIcon(str(path))
-            if not icon.isNull():
-                return icon
+    source = _app_icon_source()
+    if source is not None:
+        icon = QIcon(str(source))
+        if not icon.isNull():
+            return icon
 
     if sys.platform == "win32" and getattr(sys, "executable", ""):
         icon = QFileIconProvider().icon(QFileInfo(sys.executable))
@@ -4063,6 +4090,119 @@ def _set_windows_app_id() -> None:
             "RadCaseManager.App"
         )
     except Exception:
+        pass
+
+
+def _apply_windows_taskbar_icon(window) -> None:
+    """Force l'icône du bouton de la barre des tâches (Windows uniquement).
+
+    Qt pose l'icône de **fenêtre** (``WM_SETICON``) : la barre de titre est
+    correcte, mais l'icône de **classe** de fenêtre (``GCLP_HICON`` /
+    ``GCLP_HICONSM``) reste vide. Or, dès qu'un processus déclare un
+    ``AppUserModelID`` explicite (voir :func:`_set_windows_app_id`), Windows 11
+    cherche l'icône dans les ressources associées à cet identifiant — absentes
+    pour une application portable — puis n'a plus de repli : le bouton de la
+    barre des tâches affiche une **page blanche générique**, alors que l'icône
+    du tray (peinte par Qt) et celle de la barre de titre restent justes.
+
+    On repose donc les deux icônes (grande et petite) sur la fenêtre
+    (``WM_SETICON``) **et** sur sa classe, à partir du ``.ico`` livré ou, à
+    défaut, de l'icône gravée dans l'exécutable. À appeler quand le handle
+    natif existe (premier affichage). Silencieux en cas d'échec : l'icône de
+    barre des tâches est purement cosmétique.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        hwnd = int(window.winId())
+        if not hwnd:
+            return
+        user32 = ctypes.windll.user32
+
+        # Tailles demandées par Windows ; elles suivent le facteur DPI.
+        big_w = user32.GetSystemMetrics(11) or 32  # SM_CXICON
+        big_h = user32.GetSystemMetrics(12) or 32  # SM_CYICON
+        small_w = user32.GetSystemMetrics(49) or 16  # SM_CXSMICON
+        small_h = user32.GetSystemMetrics(50) or 16  # SM_CYSMICON
+
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x10
+        user32.LoadImageW.restype = wintypes.HANDLE
+        user32.LoadImageW.argtypes = [
+            wintypes.HINSTANCE,
+            wintypes.LPCWSTR,
+            wintypes.UINT,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        hicon_big = hicon_small = None
+        source = _app_icon_source()
+        if source is not None:
+            hicon_big = user32.LoadImageW(
+                None, str(source), IMAGE_ICON, big_w, big_h, LR_LOADFROMFILE
+            )
+            hicon_small = user32.LoadImageW(
+                None, str(source), IMAGE_ICON, small_w, small_h, LR_LOADFROMFILE
+            )
+
+        if not hicon_big or not hicon_small:
+            # Repli : icône gravée dans l'exécutable (binaire « frozen »).
+            exe = getattr(sys, "executable", "")
+            if exe:
+                big = wintypes.HICON()
+                small = wintypes.HICON()
+                user32.ExtractIconExW.argtypes = [
+                    wintypes.LPCWSTR,
+                    ctypes.c_int,
+                    ctypes.POINTER(wintypes.HICON),
+                    ctypes.POINTER(wintypes.HICON),
+                    wintypes.UINT,
+                ]
+                user32.ExtractIconExW.restype = wintypes.UINT
+                if user32.ExtractIconExW(
+                    exe, 0, ctypes.byref(big), ctypes.byref(small), 1
+                ):
+                    hicon_big = hicon_big or big.value or None
+                    hicon_small = hicon_small or small.value or None
+
+        WM_SETICON = 0x0080
+        ICON_SMALL, ICON_BIG = 0, 1
+        user32.SendMessageW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            ctypes.c_size_t,   # WPARAM
+            ctypes.c_ssize_t,  # LPARAM
+        ]
+        user32.SendMessageW.restype = ctypes.c_ssize_t
+        if hicon_big:
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big)
+        if hicon_small:
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_small)
+
+        # Icône de classe : c'est elle qu'Explorer consulte pour le bouton.
+        set_class = getattr(user32, "SetClassLongPtrW", None)
+        if set_class is not None:
+            set_class.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+            set_class.restype = ctypes.c_void_p
+            if hicon_big:
+                set_class(hwnd, -14, hicon_big)   # GCLP_HICON
+            if hicon_small:
+                set_class(hwnd, -34, hicon_small)  # GCLP_HICONSM
+        else:
+            # Python 32 bits : SetClassLongW (LONG, pas LONG_PTR).
+            set_class_long = user32.SetClassLongW
+            set_class_long.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.LONG]
+            set_class_long.restype = wintypes.LONG
+            if hicon_big:
+                set_class_long(hwnd, -14, hicon_big)
+            if hicon_small:
+                set_class_long(hwnd, -34, hicon_small)
+    except Exception:
+        # Cosmétique : ne jamais faire échouer l'affichage de la fenêtre.
         pass
 
 

@@ -38,17 +38,6 @@ except ImportError:  # pragma: no cover - fichier absent (exécution isolée)
 #: Nom du dossier applicatif dans le profil utilisateur.
 APP_NAME = "RadCaseManager"
 
-#: Dossier partagé proposé par défaut sur les postes Windows du CHUV.
-#: L'utilisateur peut le modifier dans les réglages ; la valeur n'est utilisée
-#: que si aucun dossier n'a encore été enregistré (ou si le réglage est vide).
-#: Hors Windows (développement), on garde l'ancien comportement : chemin vide,
-#: pour ne pas tenter d'ouvrir un lecteur réseau inexistant.
-DEFAULT_SHARED_ROOT = (
-    "N:/RAD/COMMUN/radcase-manager/DATABASE-RAD-CHUV"
-    if sys.platform == "win32"
-    else ""
-)
-
 # --- Emplacements locaux ----------------------------------------------------
 
 
@@ -117,7 +106,7 @@ def session_user_name() -> str:
 
 DEFAULT_SETTINGS = {
     "user_name": "",
-    "shared_root": DEFAULT_SHARED_ROOT,
+    "shared_root": "",
     "last_units": [],
     "last_browser_unit": "",
     "feed_units": None,
@@ -150,7 +139,9 @@ class Settings:
     """Réglages locaux persistés dans ``settings.json`` (profil de l'utilisateur)."""
 
     user_name: str = ""
-    shared_root: str = DEFAULT_SHARED_ROOT
+    #: Dossier partagé des cas. **Aucun chemin par défaut** : il est obligatoire
+    #: et choisi au premier lancement (dialogue de réglages), puis modifiable.
+    shared_root: str = ""
     last_units: list = field(default_factory=list)
     #: Dernière unité sélectionnée dans l'onglet « Bibliothèque » ("" = toutes).
     last_browser_unit: str = ""
@@ -193,8 +184,11 @@ def load_settings() -> Settings:
             data = {}
     known = {k: v for k, v in data.items() if k in DEFAULT_SETTINGS}
     settings = Settings(**{**DEFAULT_SETTINGS, **known})
-    if not isinstance(settings.shared_root, str) or not settings.shared_root.strip():
-        settings.shared_root = DEFAULT_SHARED_ROOT
+    # Aucun dossier n'est proposé par défaut : une valeur absente ou invalide
+    # laisse le réglage vide, ce qui déclenche le dialogue de configuration au
+    # démarrage (voir ``Settings.is_configured``).
+    if not isinstance(settings.shared_root, str):
+        settings.shared_root = ""
     if not isinstance(settings.last_units, list):
         settings.last_units = []
     if not isinstance(settings.feed_last_seen, str):
