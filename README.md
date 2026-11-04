@@ -166,9 +166,11 @@ tourne toujours (l'icône peut être cachée derrière le « ^ » de Windows 11)
 - **Pastille de nouveauté** : quand le **Fil d'actualité** contient des cas arrivés
   depuis la dernière visite, l'icône se pare d'un **point rouge** et son infobulle
   indique le nombre (`3 nouveaux cas`). Elle redevient normale dès que l'onglet
-  « Fil d'actualité » est ouvert. Le signal suit les mêmes règles que le Fil
-  (unités suivies, hors vos propres cas) ; il ne s'affiche donc pas pour un cas
-  déposé dans une unité que vous ne suivez pas.
+  « Fil d'actualité » est ouvert, et — s'il était déjà affiché — dès que les cas
+  sont lus : elle s'éteint en même temps que le compteur de l'onglet et le retour
+  du fond des cartes, sans attendre un changement d'onglet. Le signal suit les
+  mêmes règles que le Fil (unités suivies, hors vos propres cas) ; il ne s'affiche
+  donc pas pour un cas déposé dans une unité que vous ne suivez pas.
 - **Bannière système** : au passage de « rien de neuf » à « du nouveau », et
   **seulement si la fenêtre est masquée**, Windows affiche une notification
   (`Nouveau cas dans le Fil` / `US — TDM thoracique`). Un clic dessus ramène la

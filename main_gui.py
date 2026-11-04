@@ -1999,18 +1999,15 @@ class MainWindow(QMainWindow):
         cases=None,
         *,
         since: str | None = None,
-        include_read: bool = False,
     ) -> list:
         """Cas du fil « nouveaux » (non lus) pour la session courante.
 
         Nouveau = visible, dans une unité suivie, plus récent que le filigrane,
-        hors mes propres cas, et — sauf ``include_read`` — pas encore lu cette
-        session.
+        hors mes propres cas, et pas encore lu cette session.
         ``cases`` : liste déjà chargée (évite un second scan) ; ``None`` la charge.
         ``since`` : filigrane à utiliser (défaut : début de session). Le tray
         passe ``feed_last_seen`` pour une sémantique « depuis la dernière visite
         du Fil » (voir :meth:`_update_tray_alert`).
-        ``include_read`` : ignorer les cartes déjà vues dans cette session.
         """
         units = self.selected_feed_units()
         if not units:
@@ -2032,8 +2029,8 @@ class MainWindow(QMainWindow):
                 continue
             if me and case.author.strip().casefold() == me:
                 continue  # ne pas compter mes propres cas
-            if not include_read and case.id in self._feed_read_ids:
-                continue
+            if case.id in self._feed_read_ids:
+                continue  # déjà lue : ni compteur d'onglet, ni pastille du tray
             result.append(case)
         return result
 
@@ -2096,11 +2093,12 @@ class MainWindow(QMainWindow):
     def _update_tray_alert(self, cases=None) -> None:
         """Pastille rouge de l'icône de notification : « du nouveau depuis la visite ».
 
-        Sémantique volontairement **distincte** de l'onglet : l'icône redevient
-        normale dès que le Fil est ouvert (``feed_last_seen`` est alors réécrit),
-        alors que le compteur de l'onglet attend que chaque carte ait défilé à
-        l'écran. Sans quoi l'icône resterait rouge après une visite rapide, ce
-        qui est le pire des signaux pour un indicateur de tray.
+        Comme le compteur de l'onglet, la pastille ignore les cartes déjà lues ;
+        elle ne compte en plus que les cas arrivés depuis la dernière visite
+        (``feed_last_seen``). L'icône redevient donc normale dès que le Fil est
+        **ouvert** et, s'il était déjà affiché, dès que la carte est **lue** — en
+        même temps que le (1) disparaît et que le fond de la carte redevient
+        normal, sans attendre un changement d'onglet.
 
         Les filtres restent ceux du Fil (unités suivies, types, propres cas) :
         l'icône ne signale pas « un cas de plus sur le partage », mais bien « du
@@ -2120,7 +2118,7 @@ class MainWindow(QMainWindow):
             return
         if cases is None:
             cases = self._load_visible_cases()
-        fresh = self._unread_cases(cases, since=watermark, include_read=True)
+        fresh = self._unread_cases(cases, since=watermark)
         active = bool(fresh)
         was_active = self._tray_alert_active
         ready = self._tray_alert_ready

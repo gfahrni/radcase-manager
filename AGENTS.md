@@ -77,8 +77,9 @@ presse-papiers, dans un **dossier réseau partagé**.
   plus qu'au réveil. L'icône est déclinée en une variante **point rouge**
   (`tray.badged_icon`, `TrayIcon.set_alert`) quand le Fil a du nouveau depuis la
   dernière visite (`feed_last_seen`) ; elle n'est remplacée qu'aux transitions
-  repos ↔ nouveau (sinon icônes fantômes dans Explorer), et la sémantique est
-  volontairement plus simple que le compteur de l'onglet (voir `README.md`).
+  repos ↔ nouveau (sinon icônes fantômes dans Explorer). La pastille ignore, comme
+  le compteur de l'onglet, les cartes déjà lues (`_feed_read_ids`) : elle
+  s'éteint donc en même temps que le (1), sans attendre un changement d'onglet.
   Une **bannière système** (`TrayIcon.notify`, clic ⇒ `messageClicked`) est
   affichée une seule fois par vague, fenêtre masquée seulement ; pas de bannière
   au démarrage.
