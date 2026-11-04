@@ -1868,11 +1868,16 @@ class MainWindow(QMainWindow):
         # (défini avant la construction des onglets, qui lit cet état).
         self._feed_session_watermark = settings.feed_last_seen or ""
         self._feed_read_ids: set = set()
-        #: État de l'alerte du tray (voir ``_update_tray_alert``) : sert à ne
-        #: déclencher la bannière qu'au passage repos → nouveau, et à ne pas en
-        #: afficher au démarrage (``_tray_alert_ready``).
-        self._tray_alert_active = False
+        #: Cas déjà « annoncés » par la bannière système (voir
+        #: ``_update_tray_alert``) : un cas n'est annoncé qu'une fois, même si
+        #: l'on ignore la bannière. ``_tray_alert_ready`` évite la salve de
+        #: bannières au démarrage (le premier passage amorce la mémoire).
+        self._tray_announced_ids: set = set()
         self._tray_alert_ready = False
+        #: Vrai le temps d'un retour depuis la zone de notification : le
+        #: passage immédiat du Fil ne doit pas faire surgir une bannière
+        #: par-dessus la fenêtre que l'on vient de rouvrir.
+        self._tray_restore_foreground = False
 
         self.setWindowTitle("RadCase Manager")
         self.setGeometry(120, 120, 980, 680)
@@ -2091,19 +2096,30 @@ class MainWindow(QMainWindow):
         self.feed_view.append_cases(cases, unread_ids=unread)
 
     def _update_tray_alert(self, cases=None) -> None:
-        """Pastille rouge de l'icône de notification : « du nouveau depuis la visite ».
+        """Pastille rouge de l'icône de notification + bannière des cas annoncés.
 
-        Comme le compteur de l'onglet, la pastille ignore les cartes déjà lues ;
-        elle ne compte en plus que les cas arrivés depuis la dernière visite
-        (``feed_last_seen``). L'icône redevient donc normale dès que le Fil est
-        **ouvert** et, s'il était déjà affiché, dès que la carte est **lue** — en
-        même temps que le (1) disparaît et que le fond de la carte redevient
-        normal, sans attendre un changement d'onglet.
+        La **pastille** suit le même prédicat « non lu » que le compteur de
+        l'onglet : cas arrivés depuis la dernière visite (``feed_last_seen``),
+        hors cartes déjà lues. Elle s'éteint dès que le Fil est **ouvert** et,
+        s'il était déjà affiché, dès que la carte est **lue** — en même temps
+        que le (1) disparaît, sans attendre un changement d'onglet.
+
+        La **bannière** est indépendante de la pastille : chaque cas est annoncé
+        **au plus une fois** (``_tray_announced_ids``, qui remplace l'ancienne
+        bascule « repos → nouveau »), et seulement s'il est détecté alors que
+        l'application n'est **pas au premier plan** (fenêtre masquée, réduite,
+        ou simplement derrière une autre). Détecté application active, il est
+        marqué annoncé **sans** bannière : l'utilisateur est dans l'application,
+        et une bannière sortie plus tard, au passage suivant, serait en retard.
+        Plusieurs cas entre deux passages ⇒ **une seule** bannière.
 
         Les filtres restent ceux du Fil (unités suivies, types, propres cas) :
         l'icône ne signale pas « un cas de plus sur le partage », mais bien « du
         nouveau dans *ton* fil ». Tant qu'aucune visite n'est enregistrée
-        (première installation), il n'y a pas de référence : pas de pastille.
+        (première installation), il n'y a pas de référence : ni pastille ni
+        bannière. Au **démarrage**, les cas déjà « nouveaux » sont marqués
+        annoncés sans bannière (``_tray_alert_ready``) : pas de salve au
+        lancement, et surtout pas pour tout l'historique.
         """
         tray_icon = getattr(self, "_tray", None)
         if tray_icon is None:
@@ -2119,22 +2135,45 @@ class MainWindow(QMainWindow):
         if cases is None:
             cases = self._load_visible_cases()
         fresh = self._unread_cases(cases, since=watermark)
-        active = bool(fresh)
-        was_active = self._tray_alert_active
-        ready = self._tray_alert_ready
-        self._tray_alert_active = active
-        self._tray_alert_ready = True
-        tray_icon.set_alert(active, len(fresh))
-        if active and not was_active and ready and self._window_hidden():
-            self._notify_new_cases(fresh)
+        tray_icon.set_alert(bool(fresh), len(fresh))
 
-    def _window_hidden(self) -> bool:
-        """Vrai si la fenêtre n'est ni affichée ni réduite dans la barre des tâches.
+        if not self._tray_alert_ready:
+            # Premier passage (démarrage) : ce qui est déjà « nouveau » ne doit
+            # pas produire de bannière, mais doit être considéré comme annoncé.
+            self._tray_announced_ids.update(case.id for case in fresh)
+            self._tray_alert_ready = True
+            return
 
-        Seul cas où la bannière apporte quelque chose : fenêtre visible, l'onglet
-        du Fil porte déjà l'information et la bannière ne ferait que gêner.
+        # Cas supprimés (ou sortis du Fil) : ne pas les garder en mémoire.
+        self._tray_announced_ids &= {case.id for case in cases}
+        pending = [
+            case for case in fresh if case.id not in self._tray_announced_ids
+        ]
+        if not pending:
+            return
+        # Marqué annoncé dans les deux branches : au premier plan, la bannière
+        # n'apporterait rien et ne doit pas ressortir au passage suivant.
+        self._tray_announced_ids.update(case.id for case in pending)
+        if self._app_in_foreground():
+            return
+        self._notify_new_cases(pending)
+
+    def _app_in_foreground(self) -> bool:
+        """Vrai si une fenêtre de l'application est active (au premier plan).
+
+        ``QApplication.applicationState()`` couvre les trois cas qui comptent :
+        fenêtre masquée, réduite, ou derrière une autre application. Il couvre
+        aussi les dialogues de l'application : une fenêtre modale ouverte, on ne
+        fait pas surgir de bannière par-dessus.
+
+        Pendant un retour depuis la zone de notification
+        (``_tray_restore_foreground``), on répond ``True`` : la fenêtre est en
+        train de devenir active, et une bannière pour un cas déjà arrivé
+        n'apprendrait rien à qui vient d'ouvrir l'application.
         """
-        return (not self.isVisible()) or self.isMinimized()
+        if self._tray_restore_foreground:
+            return True
+        return QApplication.applicationState() == Qt.ApplicationActive
 
     def _notify_new_cases(self, fresh: list) -> None:
         """Bannière système : **une seule** par vague, sur le cas le plus récent.
@@ -2228,6 +2267,9 @@ class MainWindow(QMainWindow):
 
             self.settings.feed_last_seen = datetime.now().isoformat(timespec="seconds")
             config.save_settings(self.settings)
+            # Tout ce qui était affiché vient d'être vu : la mémoire des cas
+            # annoncés repart de zéro (sinon les anciens ids y resteraient).
+            self._tray_announced_ids.clear()
             self.reload_feed_units()
             self._update_feed_badge(getattr(self, "_feed_cases", None))
         elif index == self.public_list_tab_index:
@@ -3753,8 +3795,12 @@ class MainWindow(QMainWindow):
         # Retour depuis la zone de notification : le Fil a pu vieillir pendant
         # que la fenêtre était masquée (les ticks ne touchent pas à la vue). Un
         # passage immédiat évite d'attendre le prochain tick périodique.
-        if self.tabs.currentIndex() == self.feed_tab_index:
-            self._on_feed_tick()
+        self._tray_restore_foreground = True
+        try:
+            if self.tabs.currentIndex() == self.feed_tab_index:
+                self._on_feed_tick()
+        finally:
+            self._tray_restore_foreground = False
 
     def _open_settings_from_tray(self) -> None:
         """Ouvre les réglages depuis l'icône : la fenêtre revient d'abord."""

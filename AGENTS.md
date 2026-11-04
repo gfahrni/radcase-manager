@@ -80,9 +80,16 @@ presse-papiers, dans un **dossier réseau partagé**.
   repos ↔ nouveau (sinon icônes fantômes dans Explorer). La pastille ignore, comme
   le compteur de l'onglet, les cartes déjà lues (`_feed_read_ids`) : elle
   s'éteint donc en même temps que le (1), sans attendre un changement d'onglet.
-  Une **bannière système** (`TrayIcon.notify`, clic ⇒ `messageClicked`) est
-  affichée une seule fois par vague, fenêtre masquée seulement ; pas de bannière
-  au démarrage.
+  Une **bannière système** (`TrayIcon.notify`, clic ⇒ `messageClicked`) annonce
+  **une seule fois chaque cas** (mémoire `_tray_announced_ids`, et non plus une
+  bascule « repos → nouveau ») dès qu'il est détecté alors que l'application
+  n'est **pas au premier plan** (`QApplication.applicationState()`) : fenêtre
+  masquée, réduite ou simplement derrière une autre. Détecté application active,
+  le cas est marqué annoncé **sans** bannière (une bannière en retard serait
+  pire que rien) ; plusieurs cas entre deux passages ⇒ une seule bannière, sur
+  le plus récent. Pas de bannière au démarrage (le premier passage amorce la
+  mémoire) ni pendant un retour depuis la zone de notification
+  (`_tray_restore_foreground`).
 - `autostart.py` : **démarrage automatique à l'ouverture de session** (réglage
   `start_with_windows`, défaut `True`), via la clé `Run` du **compte courant**
   (`HKCU\…\CurrentVersion\Run`, aucun droit administrateur). L'entrée est
