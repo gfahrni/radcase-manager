@@ -131,6 +131,17 @@ presse-papiers, dans un **dossier réseau partagé**.
   Création et édition passent par `SaveCaseWorker` / `UpdateCaseWorker` dans un
   `QThread` : l'OCR et l'écriture disque ne figent pas l'interface. Un seul
   enregistrement à la fois ; l'arrêt est différé si un worker tourne.
+  **Clic droit sur un cas** (Fil, Bibliothèque, Recherche Avancée) : « Modifier
+  le cas » / « Supprimer le cas » (`_case_context_menu`). Dans le **Fil** et la
+  **Bibliothèque**, les deux entrées sont **grisées** quand le cas n'est pas
+  celui de l'utilisateur courant (`_is_own_case`, comparaison de `case.author`
+  au nom de session) ; la **Recherche Avancée reste sans restriction** (édition
+  et suppression pour tous, choix produit assumé). Seul le **bouton gauche**
+  ouvre le détail (`ClickableLabel`, `FeedCard`) : le bouton droit est réservé au
+  menu. Après édition, l'onglet d'origine est retrouvé (`_edit_origin_tab`) et
+  le Fil et la Bibliothèque sont rafraîchis ; après suppression, la vue d'origine
+  est rechargée (Fil : `_refresh_feed`, donc ré-ancrage sur la temporalité
+  active — position de lecture non conservée, choix de simplicité).
   **Sous Windows**, l'icône du bouton de la barre des tâches est posée
   explicitement (`WM_SETICON` **et** icônes de classe `GCLP_HICON` /
   `GCLP_HICONSM`, voir `_apply_windows_taskbar_icon`) au premier affichage :

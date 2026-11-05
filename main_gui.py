@@ -491,21 +491,49 @@ class ImageFrame(QLabel):
 
 
 class ClickableLabel(QLabel):
-    """Étiquette cliquable (ouvre le détail au clic sur une image)."""
+    """Étiquette cliquable (ouvre le détail au clic sur une image).
+
+    Seul le **bouton gauche** ouvre le détail : le bouton droit doit rester
+    disponible pour le menu contextuel (et ne doit ni zoomer, ni marquer lu).
+    """
 
     clicked = Signal()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
-        self.clicked.emit()
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
 
 
 class FeedCard(QFrame):
-    """Carte du fil d'actualité (cliquable sur toute sa zone)."""
+    """Carte du fil d'actualité (cliquable sur toute sa zone).
+
+    Comme :class:`ClickableLabel`, seul le bouton gauche agit (marque lu) ; le
+    bouton droit ouvre le menu contextuel du cas.
+    """
 
     clicked = Signal()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
-        self.clicked.emit()
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
+
+
+def _enable_case_context_menu(*widgets, case: storage.Case, callback) -> None:
+    """Active le menu contextuel d'un cas sur une carte **et** ses libellés.
+
+    Un clic droit sur un enfant n'atteint pas le parent : la politique est donc
+    posée sur chaque widget affiché. ``callback(case, position_écran)`` est
+    appelé avec la position convertie en coordonnées globales.
+    """
+    for widget in widgets:
+        widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        widget.customContextMenuRequested.connect(
+            lambda pos, w=widget: callback(case, w.mapToGlobal(pos))
+        )
 
 
 class SelectableLabel(QLabel):
@@ -867,6 +895,8 @@ class CaseBrowserPage(QWidget):
 
     #: Émis avec le :class:`storage.Case` quand on clique l'image d'une vignette.
     case_activated = Signal(object)
+    #: Émis avec le cas et la position écran au clic droit d'une vignette.
+    case_context_menu = Signal(object, object)
 
     def __init__(self, settings: config.Settings, visibility: str, parent: QWidget = None):
         super().__init__(parent)
@@ -1214,6 +1244,9 @@ class CaseBrowserPage(QWidget):
         title.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         title.setFixedWidth(CARD_W)
         column.addWidget(title)
+        _enable_case_context_menu(
+            card, thumb, title, case=case, callback=self.case_context_menu.emit
+        )
         return card
 
 
@@ -1273,6 +1306,8 @@ class FeedView(QWidget):
 
     #: Émis avec le :class:`storage.Case` quand on clique l'image d'une carte.
     case_activated = Signal(object)
+    #: Émis avec le cas et la position écran au clic droit d'une carte.
+    case_context_menu = Signal(object, object)
     #: Émis avec l'identifiant d'un cas lorsqu'une carte passe à « lu ».
     case_read = Signal(object)
 
@@ -1799,11 +1834,16 @@ class FeedView(QWidget):
         column.addWidget(title)
 
         description = case.description.strip()
+        cards = [card, meta, image, title]
         if description:
             body = QLabel(description)
             body.setWordWrap(True)
             body.setFixedWidth(FEED_IMG_W)
             column.addWidget(body)
+            cards.append(body)
+        _enable_case_context_menu(
+            *cards, case=case, callback=self.case_context_menu.emit
+        )
         return card
 
     def _on_image_clicked(self, case: storage.Case) -> None:
@@ -1894,12 +1934,16 @@ class MainWindow(QMainWindow):
         # de vignettes. La bascule en bas du menu choisit cas publics / privés.
         self.browser = CaseBrowserPage(settings, storage.VISIBILITY_PUBLIC)
         self.browser.case_activated.connect(self._show_case_detail)
+        self.browser.case_context_menu.connect(self._on_browser_case_menu)
         self.public_list_tab_index = self.tabs.addTab(self.browser, "📖 Bibliothèque")
         self.consult_tab_index = self.tabs.addTab(self._build_consult_tab(), "🔎 Recherche Avancée")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
         self.edit_page = None          # construit à la demande
         self._editing_case = None
+        #: Onglet d'où l'édition a été ouverte (Fil, Bibliothèque, Recherche) :
+        #: on y revient après enregistrement ou annulation.
+        self._edit_origin_tab = None
 
         # Bandeau de confirmation non bloquant (créé une fois, réutilisé).
         self._toast = Toast(self)
@@ -2440,6 +2484,7 @@ class MainWindow(QMainWindow):
         feed_content_layout.setContentsMargins(0, 0, 0, 0)
         self.feed_view = FeedView(self.settings)
         self.feed_view.case_activated.connect(self._on_feed_case_activated)
+        self.feed_view.case_context_menu.connect(self._on_feed_case_menu)
         self.feed_view.case_read.connect(self._on_feed_case_read)
         feed_content_layout.addWidget(self.feed_view)
         layout.addWidget(self.feed_content, 85)
@@ -2848,6 +2893,10 @@ class MainWindow(QMainWindow):
         """Ouvre l'onglet d'édition pré-rempli avec le cas donné."""
         if self.edit_page is None:
             self._build_edit_page()
+        if self.tabs.currentWidget() is not self.edit_page:
+            # Mémorise l'onglet d'origine (édition lancée depuis le Fil, la
+            # Bibliothèque ou la Recherche Avancée) : on y reviendra.
+            self._edit_origin_tab = self.tabs.currentWidget()
         self._editing_case = case
         self._fill_edit_form(case)
         if self.tabs.indexOf(self.edit_page) == -1:
@@ -3118,11 +3167,17 @@ class MainWindow(QMainWindow):
         self._close_edit_tab()
 
     def _close_edit_tab(self) -> None:
+        """Ferme l'onglet Édition et revient à l'onglet d'où l'édition est partie."""
         index = self.tabs.indexOf(self.edit_page)
         if index != -1:
             self.tabs.removeTab(index)
         self._editing_case = None
-        self.tabs.setCurrentIndex(self.consult_tab_index)
+        origin = self._edit_origin_tab
+        self._edit_origin_tab = None
+        if origin is not None and self.tabs.indexOf(origin) != -1:
+            self.tabs.setCurrentWidget(origin)
+        else:
+            self.tabs.setCurrentIndex(self.consult_tab_index)
 
     # --- Enregistrement en tâche de fond ---------------------------------- #
     def _start_save(self, worker: QObject, *, kind: str) -> None:
@@ -3163,6 +3218,10 @@ class MainWindow(QMainWindow):
         if self._save_kind == "edit":
             self._close_edit_tab()
             self._toast.show_message(f"✅ Cas « {case.title} » modifié.")
+            # Le cas modifié doit aussi être à jour dans la Bibliothèque et dans
+            # le Fil (l'édition y est désormais accessible par clic droit).
+            self.browser.reload_cases()
+            self._refresh_feed()
             if self.results_list.count():
                 self.run_search()
             return
@@ -3662,39 +3721,80 @@ class MainWindow(QMainWindow):
         self.case_image.set_source(case.image_path)
 
     def show_results_context_menu(self, pos) -> None:
-        """Menu contextuel (clic droit) sur la liste des résultats."""
+        """Menu contextuel (clic droit) sur la liste des résultats.
+
+        La Recherche Avancée reste volontairement **sans restriction** : édition
+        et suppression y restent ouvertes à tous, contrairement au Fil et à la
+        Bibliothèque (grisés pour les cas d'autrui).
+        """
         item = self.results_list.itemAt(pos)
         if item is None:
             return
         self.results_list.setCurrentItem(item)  # cible = le cas cliqué
-
-        menu = QMenu(self)
-        edit_action = menu.addAction("✏️  Modifier le cas")
-        edit_action.triggered.connect(self.edit_selected_case)
-        menu.addSeparator()
-        delete_action = menu.addAction("🗑  Supprimer le cas")
-        delete_action.triggered.connect(self.delete_selected_case)
-        menu.exec(self.results_list.viewport().mapToGlobal(pos))
-
-    def edit_selected_case(self) -> None:
-        """Ouvre l'onglet d'édition pour le cas sélectionné."""
-        item = self.results_list.currentItem()
-        if item is None:
-            return
         case = self._results.get(id(item))
         if case is None:
             return
-        self.start_edit(case)
+        self._case_context_menu(
+            case,
+            self.results_list.viewport().mapToGlobal(pos),
+            require_owner=False,
+            origin="search",
+        )
 
     def delete_selected_case(self) -> None:
-        """Supprime le cas sélectionné (après confirmation), via le bac à sable."""
+        """Supprime le cas sélectionné (touche Suppr dans la Recherche Avancée)."""
         item = self.results_list.currentItem()
         if item is None:
             return
         case = self._results.get(id(item))
         if case is None:
             return
+        self._delete_case(case, origin="search")
 
+    # --- Menu contextuel d'un cas (Fil, Bibliothèque, Recherche) ----------- #
+    def _on_browser_case_menu(self, case: storage.Case, global_pos) -> None:
+        """Clic droit sur une vignette de la Bibliothèque."""
+        self._case_context_menu(case, global_pos, require_owner=True, origin="library")
+
+    def _on_feed_case_menu(self, case: storage.Case, global_pos) -> None:
+        """Clic droit sur une carte du Fil d'actualité."""
+        self._case_context_menu(case, global_pos, require_owner=True, origin="feed")
+
+    def _is_own_case(self, case: storage.Case) -> bool:
+        """Vrai si le cas appartient à l'utilisateur courant (nom d'auteur)."""
+        me = (self.settings.user_name or "").strip().casefold()
+        return bool(me) and (case.author or "").strip().casefold() == me
+
+    def _case_context_menu(
+        self, case: storage.Case, global_pos, *, require_owner: bool, origin: str
+    ) -> None:
+        """Menu contextuel commun : Modifier / Supprimer un cas.
+
+        ``require_owner`` : grise les entrées quand le cas appartient à un autre
+        utilisateur (Fil, Bibliothèque). ``origin`` : vue d'où vient le clic,
+        pour rafraîchir la bonne vue après une suppression.
+        """
+        menu = QMenu(self)
+        edit_action = menu.addAction("✏️  Modifier le cas")
+        menu.addSeparator()
+        delete_action = menu.addAction("🗑  Supprimer le cas")
+
+        allowed = not require_owner or self._is_own_case(case)
+        for action in (edit_action, delete_action):
+            action.setEnabled(allowed)
+        if not allowed:
+            tip = "Seul l'auteur du cas peut le modifier ou le supprimer."
+            edit_action.setToolTip(tip)
+            delete_action.setToolTip(tip)
+
+        edit_action.triggered.connect(lambda c=case: self.start_edit(c))
+        delete_action.triggered.connect(
+            lambda c=case: self._delete_case(c, origin=origin)
+        )
+        menu.exec(global_pos)
+
+    def _delete_case(self, case: storage.Case, *, origin: str) -> None:
+        """Supprime un cas (après confirmation) puis rafraîchit la vue d'origine."""
         reply = QMessageBox.question(
             self,
             "Supprimer le cas",
@@ -3716,8 +3816,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Suppression", "Le cas n'a pas pu être supprimé (dossier introuvable ?).")
             return
 
-        self.detail.clear()
-        self.run_search()  # rafraîchit la liste avec les mêmes critères
+        # Ne pas laisser l'onglet Édition « ressusciter » le cas supprimé :
+        # update_case réécrirait le dossier à sa place.
+        if self._editing_case is not None and self._editing_case.id == case.id:
+            self._close_edit_tab()
+
+        if origin == "feed":
+            self._refresh_feed()  # au plus simple : on ré-ancre le fil
+            self._update_feed_badge(getattr(self, "_feed_cases", None))
+        elif origin == "library":
+            self.browser.reload_cases()
+        else:
+            self.detail.clear()
+            self.run_search()  # rafraîchit la liste avec les mêmes critères
 
     # --- Réglages ---------------------------------------------------------- #
     # ------------------------------------------------------------------ #

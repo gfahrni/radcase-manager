@@ -97,6 +97,13 @@ Un cas n'existe que lorsque son dossier au **nom final** est complet. Les dossie
 ## ✏️ Édition
 
 Un cas est éditable (onglet « Édition » dédié, ouvert par clic droit → « Modifier »).
+Le même menu propose « Supprimer le cas » (dossier envoyé à la corbeille du système).
+
+- Dans le **Fil d'actualité** et la **Bibliothèque**, ces deux entrées sont
+  **grisées** quand le cas n'appartient pas à l'utilisateur courant (auteur
+  différent du nom de session).
+- La **Recherche Avancée** reste volontairement **sans restriction** : édition et
+  suppression y restent possibles pour tous les cas visibles.
 
 - `id` et `date_added` sont **conservés** ; une clé `date_modified` est ajoutée.
 - L'ancien dossier est envoyé à la **corbeille**, puis le nouveau est réécrit
