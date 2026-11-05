@@ -129,6 +129,9 @@ QPushButton#feedNewPill {{ background-color: {highlight}; color: {highlighted_te
                            border: none; border-radius: 12px; padding: 6px 14px;
                            font-weight: bold; }}
 QPushButton#feedNewPill:hover {{ background-color: {pill_hover}; }}
+QPushButton#reactionAdd {{ background: transparent; border: 1px solid transparent;
+                          border-radius: 13px; padding: 0px; font-size: 14px; }}
+QPushButton#reactionAdd:hover {{ background-color: {hover_background().name()}; }}
 QPushButton#reactionChip {{ background: transparent; border: 1px solid transparent;
                             border-radius: 12px; padding: 1px 5px; font-size: 14px; }}
 QPushButton#reactionChip:hover {{ background-color: {hover_background().name()}; }}

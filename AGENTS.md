@@ -137,7 +137,11 @@ presse-papiers, dans un **dossier réseau partagé**.
   l'on lit plus haut (pastille « ↓ N nouveaux cas ») ; collé au bas, on y reste ;
   au retour depuis la zone de notification, un passage immédiat est fait.
   Chaque carte porte aussi une **rangée de réactions anonymes** (`reactions.py`,
-  7 emojis) ; le même passage périodique recharge les réactions d'autrui et met
+  7 emojis) : un bouton **« ➕ »** à gauche (`reactionAdd`) déploie le choix des
+  7 emojis dans un menu (`FeedView._show_reaction_menu`), et seules les
+  pastilles des emojis **déjà posés** (compteur > 0) restent affichées à droite
+  — aucune pastille si personne n'a réagi, donc pas d'emojis visibles en
+  permanence. Le même passage périodique recharge les réactions d'autrui et met
   à jour les rangées existantes (`FeedView._reload_reactions`), sans
   reconstruire les cartes.
   Création et édition passent par `SaveCaseWorker` / `UpdateCaseWorker` dans un

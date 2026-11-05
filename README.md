@@ -20,8 +20,11 @@ partagé**.
 - **Cas figés** (append-only) : on n'écrit jamais deux fois le même cas, ce qui
   évite tout conflit de verrou sur le partage réseau.
 - **Écriture atomique** : dossier temporaire `.tmp_<id>` puis renommage.
-- **Réactions anonymes** : chaque carte du Fil propose 7 emojis
-  (`👍 👀 ⭐ 😨 😅 😮 🔥`). Chaque utilisateur en pose **un seul par cas** :
+- **Réactions anonymes** : chaque carte du Fil porte un bouton **« ➕ »** qui
+  déploie les 7 emojis (`👍 👀 ⭐ 😨 😅 😮 🔥`) ; seuls les emojis **déjà
+  posés** (compteur > 0) s'affichent ensuite à côté du bouton, donc aucun
+  emoji n'encombre le Fil tant que personne n'a réagi. Chaque utilisateur en
+  pose **un seul par cas** :
   re-cliquer le même emoji le retire, en cliquer un autre le remplace. Les
   réactions vivent **hors des dossiers de cas**, dans `reactions/` à la racine
   du partage (un fichier JSON par utilisateur, écriture atomique) : les cas

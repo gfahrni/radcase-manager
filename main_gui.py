@@ -1855,7 +1855,10 @@ class FeedView(QWidget):
             column.addWidget(body)
             cards.append(body)
 
-        # Rangée de réactions, en bas de carte : 7 pastilles, compteur anonyme.
+        # Rangée de réactions, en bas de carte : un bouton « ➕ » à gauche, puis
+        # uniquement les pastilles des emojis réellement posés (compteur > 0).
+        # Les 7 emojis ne sont donc pas affichés en permanence : le bouton les
+        # déploie au clic (voir _show_reaction_menu).
         # Un bouton consomme le clic : réagir n'ouvre pas le cas et ne le marque
         # pas « lu » (contrairement au reste de la carte).
         bar = QWidget()
@@ -1864,6 +1867,18 @@ class FeedView(QWidget):
         row.setContentsMargins(0, 2, 0, 0)
         row.setSpacing(2)
         row.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        add = QPushButton("➕")
+        add.setObjectName("reactionAdd")
+        add.setCursor(Qt.PointingHandCursor)
+        add.setFocusPolicy(Qt.NoFocus)
+        add.setFixedSize(26, 26)
+        add.setToolTip("Réagir")
+        add.clicked.connect(
+            lambda _checked=False, cid=case.id, a=add: self._show_reaction_menu(
+                cid, a
+            )
+        )
+        row.addWidget(add)
         self._reaction_bars[case.id] = bar
         self._fill_reaction_bar(case.id, bar)
         column.addWidget(bar)
@@ -1897,10 +1912,15 @@ class FeedView(QWidget):
                 self._fill_reaction_bar(case_id, bar)
 
     def _fill_reaction_bar(self, case_id, bar: QWidget) -> None:
-        """(Re)construit les pastilles d'une carte : emoji, compteur, état actif."""
+        """(Re)construit les pastilles d'une carte : emoji, compteur, état actif.
+
+        Le bouton « ➕ » (premier élément) reste en place ; seules les pastilles
+        des emojis **déjà posés** (compteur > 0) sont affichées, dans l'ordre de
+        :data:`reactions.EMOJIS`. Aucune pastille quand personne n'a réagi.
+        """
         layout = bar.layout()
-        while layout.count():
-            item = layout.takeAt(0)
+        while layout.count() > 1:  # on garde le bouton « ➕ » en tête
+            item = layout.takeAt(1)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -1908,7 +1928,9 @@ class FeedView(QWidget):
         mine = self._my_reactions.get(case_id, "")
         for emoji in reactions.EMOJIS:
             count = counts.get(emoji, 0)
-            button = QPushButton(f"{emoji} {count}" if count else emoji)
+            if count <= 0:
+                continue  # personne n'a choisi cet emoji : pas de pastille
+            button = QPushButton(f"{emoji} {count}")
             button.setObjectName("reactionChipMine" if emoji == mine else "reactionChip")
             button.setCursor(Qt.PointingHandCursor)
             button.setFocusPolicy(Qt.NoFocus)
@@ -1920,6 +1942,26 @@ class FeedView(QWidget):
             )
             layout.addWidget(button)
         layout.addStretch()
+
+    def _show_reaction_menu(self, case_id, anchor: QWidget) -> None:
+        """Déploie les 7 emojis sous le bouton « ➕ » d'une carte.
+
+        La réaction courante de l'utilisateur porte une **coche** en fin de
+        ligne ; cliquer dessus la retire (même règle que les pastilles, voir
+        :func:`reactions.toggle`). Pas de cases à cocher : un seul emoji est
+        possible par cas, une liste à cocher suggérerait un choix multiple.
+        """
+        menu = QMenu(self)
+        mine = self._my_reactions.get(case_id, "")
+        for emoji in reactions.EMOJIS:
+            label = reactions.EMOJI_LABELS.get(emoji, emoji)
+            text = f"{emoji}   {label}" + ("  ✓" if emoji == mine else "")
+            action = menu.addAction(text)
+            action.triggered.connect(
+                lambda _checked=False, e=emoji, cid=case_id: self._on_reaction(cid, e)
+            )
+        menu.exec(anchor.mapToGlobal(QPoint(0, anchor.height() + 2)))
+        menu.deleteLater()
 
     def _on_reaction(self, case_id, emoji: str) -> None:
         """Ajoute, remplace ou retire ma réaction (une seule par cas)."""
