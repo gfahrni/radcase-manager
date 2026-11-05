@@ -38,6 +38,14 @@ presse-papiers, dans un **dossier réseau partagé**.
   `search_cases()`, plus l'**index local** (`settings_data/index.db`, cache
   reconstructible, maj par mtime). Scan de l'arbre **anti-rebondi** (TTL) pour
   qu'une rafale de lectures ne déclenche qu'un seul scan.
+- `reactions.py` : **réactions anonymes du Fil** (7 emojis prédéfinis, un seul
+  par utilisateur et par cas). Stockées **hors des dossiers de cas** (les cas
+  sont figés), dans `<partage>/reactions/`, un fichier JSON par utilisateur :
+  chacun n'écrit que le sien, donc deux réactions simultanées ne se perdent
+  pas. Écriture atomique (`os.replace`) avec réessais sous Windows (un lecteur
+  concurrent peut bloquer le remplacement). Cliquer le même emoji retire la
+  réaction, un autre la remplace. Aucun nom d'utilisateur n'est affiché :
+  uniquement les compteurs par emoji.
 - `ocr.py` : **OCR natif Windows** (`Windows.Media.Ocr`, paquets `winrt-*`),
   sans modèle ni appel réseau. Import paresseux, dans un **thread dédié et
   persistant** (WinRT fige le mode d'appartement du premier thread : ne pas
@@ -128,6 +136,10 @@ presse-papiers, dans un **dossier réseau partagé**.
   qui ré-ancrerait la vue sur la date du jour). Le défilement n'est pas déplacé si
   l'on lit plus haut (pastille « ↓ N nouveaux cas ») ; collé au bas, on y reste ;
   au retour depuis la zone de notification, un passage immédiat est fait.
+  Chaque carte porte aussi une **rangée de réactions anonymes** (`reactions.py`,
+  7 emojis) ; le même passage périodique recharge les réactions d'autrui et met
+  à jour les rangées existantes (`FeedView._reload_reactions`), sans
+  reconstruire les cartes.
   Création et édition passent par `SaveCaseWorker` / `UpdateCaseWorker` dans un
   `QThread` : l'OCR et l'écriture disque ne figent pas l'interface. Un seul
   enregistrement à la fois ; l'arrêt est différé si un worker tourne.
@@ -160,6 +172,11 @@ presse-papiers, dans un **dossier réseau partagé**.
   (`QPalette`) ou règle de la feuille de style de `theme` (objectName). Seules
   exceptions : surfaces d'image noires et couleurs sémantiques (vert
   d'enregistrement, rouge d'édition, toast).
+- Réactions du Fil : **un emoji au plus par utilisateur et par cas**, stocké
+  dans `<partage>/reactions/` (jamais dans les dossiers de cas, qui sont figés).
+  Chaque utilisateur n'écrit que son propre fichier ; écriture atomique.
+  Compteurs et infobulles restent **anonymes** (jamais le nom de qui a réagi).
+  Cliquer le même emoji retire la réaction ; un autre la remplace.
 - L'onglet « Consulter » n'affiche **rien par défaut** (recherche à la demande),
   pour ne pas saturer avec des milliers de cas.
 - OCR : réglage local `ocr_enabled` (défaut `True`). Le texte est dans

@@ -52,6 +52,8 @@ Ce dossier contient les cas cliniques enregistrés avec RadCase Manager.
 - `cases/AAAA-MM/<id>/case.md` : les métadonnées et la description d'un cas.
 - `cases/AAAA-MM/<id>/image.jpg` : l'image du cas (le cas échéant), compressée
   en JPEG (les cas plus anciens peuvent contenir un `image.png`).
+- `reactions/` : les réactions anonymes du Fil (un fichier JSON par utilisateur,
+  un emoji au plus par cas et par personne ; aucun nom n'est affiché).
 - `units.json` : le vocabulaire contrôlé des unités (modifiable par tous).
 - `users.json` : la liste partagée des utilisateurs connus (auteurs). Chaque
   poste y ajoute automatiquement le compte de sa session Windows ; le choix du
@@ -69,6 +71,8 @@ def ensure_shared_structure(shared_root: str | Path) -> Path:
     root = Path(shared_root)
     root.mkdir(parents=True, exist_ok=True)
     (root / CASES_DIRNAME).mkdir(parents=True, exist_ok=True)
+    # Réactions du Fil (voir reactions.py) : un fichier JSON par utilisateur.
+    (root / "reactions").mkdir(parents=True, exist_ok=True)
 
     units_path = root / UNITS_FILENAME
     if not units_path.exists():

@@ -20,6 +20,13 @@ partagé**.
 - **Cas figés** (append-only) : on n'écrit jamais deux fois le même cas, ce qui
   évite tout conflit de verrou sur le partage réseau.
 - **Écriture atomique** : dossier temporaire `.tmp_<id>` puis renommage.
+- **Réactions anonymes** : chaque carte du Fil propose 7 emojis
+  (`👍 👀 ⭐ 😨 😅 😮 🔥`). Chaque utilisateur en pose **un seul par cas** :
+  re-cliquer le même emoji le retire, en cliquer un autre le remplace. Les
+  réactions vivent **hors des dossiers de cas**, dans `reactions/` à la racine
+  du partage (un fichier JSON par utilisateur, écriture atomique) : les cas
+  restent figés, et deux personnes ne peuvent pas écraser leurs réactions
+  mutuelles. Seuls les compteurs sont affichés, jamais les noms.
 - **OCR natif Windows** : le texte de l'image (IPP, annotations…) est lu à
   l'enregistrement par `Windows.Media.Ocr`, sans moteur externe ni réseau. Le
   texte est stocké dans `case.md` (`ocr_text` / `ocr_status`) et ajouté à
@@ -212,6 +219,7 @@ Voir `autostart.py`.
 | `config.py` | réglages locaux et chemins |
 | `bootstrap.py` | initialisation du dossier partagé |
 | `storage.py` | création atomique, lecture et recherche des cas |
+| `reactions.py` | réactions anonymes du Fil (stockage JSON hors des cas) |
 | `ocr.py` | OCR natif Windows, en tâche de fond (`Windows.Media.Ocr`) |
 | `thumbnails.py` | cache local des vignettes d'affichage |
 | `theme.py` | couleurs dérivées du thème Windows (clair / sombre) |

@@ -129,6 +129,12 @@ QPushButton#feedNewPill {{ background-color: {highlight}; color: {highlighted_te
                            border: none; border-radius: 12px; padding: 6px 14px;
                            font-weight: bold; }}
 QPushButton#feedNewPill:hover {{ background-color: {pill_hover}; }}
+QPushButton#reactionChip {{ background: transparent; border: 1px solid transparent;
+                            border-radius: 12px; padding: 1px 5px; font-size: 14px; }}
+QPushButton#reactionChip:hover {{ background-color: {hover_background().name()}; }}
+QPushButton#reactionChipMine {{ background-color: {highlight}; color: {highlighted_text};
+                                border: 1px solid transparent; border-radius: 12px;
+                                padding: 1px 5px; font-size: 14px; font-weight: bold; }}
 QWidget#editPage {{ background-color: {edit_background().name()}; }}
 """
 

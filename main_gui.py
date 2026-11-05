@@ -52,6 +52,7 @@ import autostart
 import bootstrap
 import config
 import ocr
+import reactions
 import storage
 import theme
 import thumbnails
@@ -1310,6 +1311,8 @@ class FeedView(QWidget):
     case_context_menu = Signal(object, object)
     #: Émis avec l'identifiant d'un cas lorsqu'une carte passe à « lu ».
     case_read = Signal(object)
+    #: Émis avec un message quand une réaction n'a pas pu être enregistrée.
+    reaction_failed = Signal(str)
 
     def __init__(self, settings: config.Settings, parent: QWidget = None):
         super().__init__(parent)
@@ -1331,6 +1334,9 @@ class FeedView(QWidget):
         self._seen_ids: set = set()         # cas déjà passés dans la zone visible
         self._cards_by_id: dict = {}        # id de cas -> carte
         self._cases: list = []              # cas du fil (ancien → récent)
+        self._reactions: dict = {}          # id de cas -> {emoji: nombre}
+        self._my_reactions: dict = {}       # id de cas -> mon emoji
+        self._reaction_bars: dict = {}      # id de cas -> rangée de pastilles
         self._unit_emoji: dict = {}         # nom d'unité -> emoji (units.json)
         self._win_start = 0                 # borne basse de la fenêtre construite
         self._win_end = 0                   # borne haute (exclue)
@@ -1410,9 +1416,11 @@ class FeedView(QWidget):
         ``cases`` : cas déjà chargés (évite un second scan) ; ``None`` les charge.
         """
         self._refresh_unit_emoji()
+        self._load_reactions()
         self._unread_ids = set(unread_ids or ())
         self._seen_ids = set()
         self._cards_by_id = {}
+        self._reaction_bars = {}
         self._anchor = anchor
         self._units_filter = list(units) if units is not None else None
         self._types_filter = set(case_types) if case_types is not None else None
@@ -1582,6 +1590,11 @@ class FeedView(QWidget):
         if unread_ids:
             self._unread_ids |= set(unread_ids)
         self._latest_cases = list(cases)
+        if self._cases:
+            # Réactions posées par les autres depuis le dernier passage : on les
+            # recharge et on met à jour les rangées déjà affichées (sans
+            # reconstruire les cartes ni déplacer la lecture).
+            self._reload_reactions()
         known = {case.id for case in self._cases}
         fresh = self._apply_filters([c for c in cases if c.id not in known])
         if not fresh:
@@ -1841,6 +1854,20 @@ class FeedView(QWidget):
             body.setFixedWidth(FEED_IMG_W)
             column.addWidget(body)
             cards.append(body)
+
+        # Rangée de réactions, en bas de carte : 7 pastilles, compteur anonyme.
+        # Un bouton consomme le clic : réagir n'ouvre pas le cas et ne le marque
+        # pas « lu » (contrairement au reste de la carte).
+        bar = QWidget()
+        bar.setFixedWidth(FEED_IMG_W)
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(0, 2, 0, 0)
+        row.setSpacing(2)
+        row.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._reaction_bars[case.id] = bar
+        self._fill_reaction_bar(case.id, bar)
+        column.addWidget(bar)
+
         _enable_case_context_menu(
             *cards, case=case, callback=self.case_context_menu.emit
         )
@@ -1850,6 +1877,84 @@ class FeedView(QWidget):
         """Clic sur l'image : marque lu, puis ouvre le zoom détail."""
         self._mark_read(case.id)
         self.case_activated.emit(case)
+
+    # --- Réactions anonymes (voir reactions.py) --------------------------- #
+    def _load_reactions(self) -> None:
+        """Recharge les compteurs et la réaction de l'utilisateur courant."""
+        try:
+            self._reactions, self._my_reactions = reactions.load_all(
+                self.settings.shared_root, self.settings.user_name
+            )
+        except Exception:  # noqa: BLE001 (vue best-effort)
+            self._reactions, self._my_reactions = {}, {}
+
+    def _reload_reactions(self) -> None:
+        """Recharge les réactions et rafraîchit les cartes déjà construites."""
+        previous = self._reactions
+        self._load_reactions()
+        for case_id, bar in self._reaction_bars.items():
+            if previous.get(case_id) != self._reactions.get(case_id):
+                self._fill_reaction_bar(case_id, bar)
+
+    def _fill_reaction_bar(self, case_id, bar: QWidget) -> None:
+        """(Re)construit les pastilles d'une carte : emoji, compteur, état actif."""
+        layout = bar.layout()
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        counts = self._reactions.get(case_id, {})
+        mine = self._my_reactions.get(case_id, "")
+        for emoji in reactions.EMOJIS:
+            count = counts.get(emoji, 0)
+            button = QPushButton(f"{emoji} {count}" if count else emoji)
+            button.setObjectName("reactionChipMine" if emoji == mine else "reactionChip")
+            button.setCursor(Qt.PointingHandCursor)
+            button.setFocusPolicy(Qt.NoFocus)
+            button.setFixedHeight(26)
+            # Infobulle = sens de l'emoji, jamais le nom de qui a réagi.
+            button.setToolTip(reactions.EMOJI_LABELS.get(emoji, emoji))
+            button.clicked.connect(
+                lambda _checked=False, e=emoji, cid=case_id: self._on_reaction(cid, e)
+            )
+            layout.addWidget(button)
+        layout.addStretch()
+
+    def _on_reaction(self, case_id, emoji: str) -> None:
+        """Ajoute, remplace ou retire ma réaction (une seule par cas)."""
+        previous = self._my_reactions.get(case_id, "")
+        try:
+            new_emoji = reactions.toggle(
+                self.settings.shared_root,
+                self.settings.user_name,
+                case_id,
+                emoji,
+            )
+        except Exception:  # noqa: BLE001 (partage inaccessible, droits…)
+            self.reaction_failed.emit(
+                "Réaction non enregistrée (dossier partagé inaccessible)."
+            )
+            return
+
+        counts = self._reactions.setdefault(case_id, {})
+        if previous:
+            remaining = counts.get(previous, 0) - 1
+            if remaining > 0:
+                counts[previous] = remaining
+            else:
+                counts.pop(previous, None)
+        if new_emoji:
+            self._my_reactions[case_id] = new_emoji
+            counts[new_emoji] = counts.get(new_emoji, 0) + 1
+        else:
+            self._my_reactions.pop(case_id, None)
+        if not counts:
+            self._reactions.pop(case_id, None)
+
+        bar = self._reaction_bars.get(case_id)
+        if bar is not None:
+            self._fill_reaction_bar(case_id, bar)
 
     @staticmethod
     def _apply_card_style(card: QFrame, *, unread: bool) -> None:
@@ -1947,6 +2052,8 @@ class MainWindow(QMainWindow):
 
         # Bandeau de confirmation non bloquant (créé une fois, réutilisé).
         self._toast = Toast(self)
+        # Une réaction qui n'a pas pu être écrite sur le partage est signalée.
+        self.feed_view.reaction_failed.connect(self._toast.show_message)
         # Superposition de détail (image + titre + description + métadonnées).
         self._overlay = DetailOverlay(self)
         self._selected_case = None
