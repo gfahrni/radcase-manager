@@ -226,9 +226,10 @@ presse-papiers, dans un **dossier réseau partagé**.
      C'est la solution de repli quand le jeton `gh` est invalide.
   La **création de la release** ne demande pas d'authentification locale : le
   workflow utilise son propre `GITHUB_TOKEN` (voir `.github/workflows/`).
-- **Pas de `.git` local** dans le dossier du projet : on pousse la version
-  actuelle depuis un **clone temporaire** du dépôt (synchroniser la racine
-  dedans, puis commit + push sur `main`).
+- **Dépôt Git local** : le dossier du projet est un dépôt normal (`.git` à la
+  racine, branche `main`, upstream `origin/main`). Publier directement ici :
+  `git add` → `git commit` → `git push origin main`. L'ancien workflow par
+  clone temporaire est abandonné.
 - Pousser **la racine seule** (fichiers du projet : `*.py`, `*.md`, `.github/`,
   etc.) ; **jamais `archive/`** (plus d'instantanés sur le disque : les versions
   antérieures vivent sur GitHub, récupérables par tag ou release. Le dossier est
