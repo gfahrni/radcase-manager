@@ -181,11 +181,24 @@ plage de dates, texte (titre + description).
 ⚠️ Aucun affichage par défaut : l'onglet « Consulter » ne liste rien tant qu'un
 critère n'est pas saisi (évite de déverser des milliers de lignes).
 
-## 🖥️ Affichage à l'échelle (vignettes + chargement progressif)
+## 🖥️ Affichage à l'échelle (liste + vignettes à la demande)
 
 Objectif : rester fluide avec des milliers de cas, y compris sur un dossier
 partagé réseau (2000+ cas visés).
 
+- **Bibliothèque en liste, sans vignette** : deux colonnes (titre, date) dans un
+  `QTreeWidget`, et un en-tête cliquable qui trie par titre (alphabétique) ou par
+  date — un second clic sur la même colonne inverse l'ordre. Le choix est
+  mémorisé par poste (`browser_sort` / `browser_sort_desc`). **Aucune image n'est
+  lue ni décodée à l'ouverture** : c'est le décodage des vignettes, en série dans
+  le thread de l'interface, qui coûtait cher (une lecture réseau + un décodage +
+  un ré-encodage JPEG par carte). Mesure : ~3 ms pour remplir 1 000 lignes.
+- **Panneau de détail à droite** (`QSplitter`) : vignette en haut, cliquable pour
+  le plein écran (`DetailOverlay`), informations complètes en dessous (n° de
+  demande, unités, type, visibilité, auteur, dates, identifiant, description).
+  Une **seule** image est chargée, à la sélection ; elle est demandée dans la
+  **même boîte que les cartes du Fil** (`PANE_IMG_W × PANE_IMG_H` =
+  `FEED_IMG_W × FEED_IMG_H`) pour **partager le cache de vignettes**.
 - **Vignettes mises en cache** (`thumbnails.py`) : jamais d'image plein format
   décodée pour l'affichage. La vignette est produite une seule fois, à la taille
   d'affichage, via `QImageReader.setScaledSize` (décodage **directement réduit**),
@@ -193,9 +206,9 @@ partagé réseau (2000+ cas visés).
   partage. La clé inclut le `mtime` et la taille du fichier source : une image
   modifiée est recalculée automatiquement. Cache **reconstructible** (purge des
   plus anciennes au-delà de `THUMB_MAX_FILES`).
-- **Chargement progressif** : la Bibliothèque et le Fil ne construisent que la
-  fenêtre visible (paliers `BROWSER_PAGE` / `FEED_PAGE`), complétée au fil du
-  défilement (remontée de l'historique pour le fil). La mémoire reste bornée,
+- **Fil en chargement progressif** (`FEED_PAGE` = 40 cartes) : le Fil, lui, garde
+  ses cartes illustrées ; il ne construit que la fenêtre visible, complétée au fil
+  du défilement (remontée de l'historique). La mémoire reste bornée,
   indépendamment du nombre de cas.
 - **Vie du Fil ouvert** (`FEED_BADGE_INTERVAL_MS`, 2 min) : le même passage
   périodique qui met à jour le badge et l'alerte du tray **ajoute** au Fil les cas
@@ -209,12 +222,12 @@ partagé réseau (2000+ cas visés).
   (`restore_from_tray`). Aucune surveillance de fichiers : le dossier partagé est
   réseau, le sondage périodique passe par l'anti-rebond de l'index.
 - **Recherche rapide** (Bibliothèque) : anti-rebond `QUICK_SEARCH_DEBOUNCE_MS`,
-  pour ne pas reconstruire la grille à chaque frappe.
+  pour ne pas reconstruire la liste à chaque frappe.
 
-Mesures (213 cas, disque local, cache de vignettes chaud) : ouverture ~0,3 s et
-changement d'onglet ~0,01–0,05 s (contre ~5 s et ~2,3 s avant). Premier lancement
-(cache de vignettes vide) : ~1 s, le temps de produire les vignettes de la
-fenêtre affichée.
+Mesures : liste de 1 000 cas remplie en ~3 ms ; une sélection charge une vignette
+déjà en cache (~1 ms) ou la génère une fois (lecture réseau + décodage réduit).
+Ouverture de l'application ~0,3 s et changement d'onglet ~0,05 s (213 cas, disque
+local, hors chargement d'image).
 
 ## 🧩 Modules
 

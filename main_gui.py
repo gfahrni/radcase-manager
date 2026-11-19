@@ -3,7 +3,7 @@
 Onglets :
 - « Nouveau cas »   : collage du presse-papiers + formulaire d'enregistrement.
 - « Fil d'actualité » : flux des derniers cas (contenu à venir).
-- « Bibliothèque »  : navigation par unités (cas publics / privés).
+- « Bibliothèque »  : liste des cas par unités (titre / date, triable) + détail.
 - « Recherche Avancée » : recherche multi-critères dans les cas existants.
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 from PySide6.QtCore import QDate, QEvent, QFileInfo, QObject, QPoint, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QIcon, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -41,9 +43,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSplitter,
     QTabWidget,
     QTextEdit,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -469,6 +474,11 @@ class ImageFrame(QLabel):
         self._source = None if pixmap.isNull() else pixmap
         self._refresh()
 
+    def set_pixmap(self, pixmap: QPixmap) -> None:
+        """Affiche un pixmap déjà chargé (vignette du panneau de détail)."""
+        self._source = None if pixmap is None or pixmap.isNull() else pixmap
+        self._refresh()
+
     def clear_source(self) -> None:
         self._source = None
         self._refresh()
@@ -477,6 +487,9 @@ class ImageFrame(QLabel):
         self.setCursor(Qt.PointingHandCursor if self._source is not None else Qt.ArrowCursor)
         if self._source is None:
             self.clear()
+            return
+        # Pas encore mise en page (taille nulle) : `resizeEvent` rappellera.
+        if self.width() < 2 or self.height() < 2:
             return
         self.setPixmap(
             self._source.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -815,18 +828,30 @@ class ConfirmCaseDialog(QDialog):
 # --------------------------------------------------------------------------- #
 # Navigateur de cas (onglets « Bibliothèque » / « Mes cas »)
 # --------------------------------------------------------------------------- #
-#: Taille des vignettes (image) et largeur d'une carte.
-CARD_IMG_W, CARD_IMG_H = 150, 112
-CARD_W = CARD_IMG_W + 10
+#: Vignette du panneau de détail. Même boîte que les cartes du Fil
+#: (``FEED_IMG_W × FEED_IMG_H``) pour **partager le cache de vignettes** : une
+#: image déjà vue dans le Fil n'est pas régénérée pour la Bibliothèque.
+PANE_IMG_W, PANE_IMG_H = 387, 267
 
-#: Nombre de vignettes construites par palier dans la Bibliothèque : la grille
-#: se remplit au fur et à mesure du défilement (reste fluide à 2000+ cas).
-BROWSER_PAGE = 60
-#: Distance (px) du bas à partir de laquelle on prépare le palier suivant.
-GRID_PREFETCH_PX = 600
-#: Anti-rebond de la recherche rapide (ms) : évite de reconstruire la grille à
+#: Largeur initiale du panneau de détail (px) ; réglable en tirant le séparateur.
+PANE_WIDTH = 330
+
+#: Anti-rebond de la recherche rapide (ms) : évite de reconstruire la liste à
 #: chaque frappe pendant la saisie.
 QUICK_SEARCH_DEBOUNCE_MS = 220
+
+#: Clés de tri de la liste (mémorisées dans les réglages locaux).
+SORT_TITLE = "title"
+SORT_DATE = "date"
+
+
+def _case_date_label(case: storage.Case) -> str:
+    """Date d'ajout compacte (JJ.MM.AAAA), ou vide si elle est illisible."""
+    moment = case.datetime
+    if moment is None:
+        return ""
+    return f"{moment.day:02d}.{moment.month:02d}.{moment.year}"
+
 
 #: Dimensions du « Fil d'actualité » (cartes, type réseau social).
 FEED_CARD_W = 420
@@ -884,19 +909,26 @@ def checked_case_types(boxes) -> set:
 
 
 class CaseBrowserPage(QWidget):
-    """Onglet de navigation : menu d'unités (gauche) + grille de vignettes.
+    """Onglet de navigation : filtres (gauche) + liste des cas + détail (droite).
 
     Le menu de gauche liste « Tout » puis les unités partagées ; « Tout » affiche
     les cas de toutes les unités, y compris ceux qui n'en ont aucune, et une
-    seule unité peut être sélectionnée à la fois. La zone principale affiche,
-    triés par titre, les cas correspondants.
+    seule unité peut être sélectionnée à la fois.
+
+    La zone centrale est une **liste** (titre + date), volontairement **sans
+    vignette** : c'est le décodage des images qui coûtait cher au chargement.
+    L'en-tête est cliquable pour trier par titre (alphabétique) ou par date ; un
+    second clic sur la même colonne inverse l'ordre. Le cas sélectionné s'affiche
+    à droite : **vignette en haut** (cliquable pour le plein écran), informations
+    complètes en dessous.
+
     Une bascule en bas du menu choisit entre cas **publics** et cas **privés**
     (ces derniers limités aux cas privés de l'utilisateur courant).
     """
 
-    #: Émis avec le :class:`storage.Case` quand on clique l'image d'une vignette.
+    #: Émis avec le :class:`storage.Case` quand on clique la vignette du détail.
     case_activated = Signal(object)
-    #: Émis avec le cas et la position écran au clic droit d'une vignette.
+    #: Émis avec le cas et la position écran au clic droit d'une ligne.
     case_context_menu = Signal(object, object)
 
     def __init__(self, settings: config.Settings, visibility: str, parent: QWidget = None):
@@ -909,16 +941,20 @@ class CaseBrowserPage(QWidget):
         self._selected_unit = None      # None = toutes les unités
         self._unit_cases: list = []     # cas de l'unité/visibilité courantes
         self._quick_text = ""           # filtre de recherche rapide (titre)
-        self._card_widgets: list = []   # vignettes construites
+        self._filtered: list = []       # cas affichés, dans l'ordre de tri courant
+        self._cases_by_item: dict = {}  # id(item) -> Case
+        self._selected_case = None      # cas du panneau de détail
         self._empty_label = None        # message si aucun cas
-        self._columns = 0               # colonnes courantes (recalculées au resize)
-        self._filtered: list = []       # cas après recherche rapide (triés)
-        self._built = 0                 # nombre de vignettes déjà construites
-        # Anti-rebond : reconstruire la grille à chaque frappe saccade la saisie.
+        # Tri courant, mémorisé dans les réglages locaux (propre à chaque poste).
+        self._sort = getattr(settings, "browser_sort", SORT_TITLE)
+        if self._sort not in (SORT_TITLE, SORT_DATE):
+            self._sort = SORT_TITLE
+        self._sort_desc = bool(getattr(settings, "browser_sort_desc", False))
+        # Anti-rebond : reconstruire la liste à chaque frappe saccade la saisie.
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(QUICK_SEARCH_DEBOUNCE_MS)
-        self._search_timer.timeout.connect(self._refresh_grid)
+        self._search_timer.timeout.connect(self._refresh_list)
         self._build_ui()
         self.reload_units()
         self.reload_cases()
@@ -1007,21 +1043,111 @@ class CaseBrowserPage(QWidget):
 
         outer.addWidget(left, 15)
 
-        # Zone principale (~85 %) : grille de vignettes, défilable.
-        self.grid_scroll = QScrollArea()
-        self.grid_scroll.setWidgetResizable(True)
-        self.grid_scroll.setFrameShape(QFrame.NoFrame)
-        self.grid_container = QWidget()
-        self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setContentsMargins(12, 12, 12, 12)
-        self.grid_layout.setSpacing(12)
-        self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.grid_scroll.setWidget(self.grid_container)
-        # Chargement progressif : on construit la suite de la grille en approchant
-        # du bas (avant-dernière page), pour ne jamais matérialiser tout d'un coup.
-        self.grid_scroll.verticalScrollBar().valueChanged.connect(self._on_grid_scroll)
-        outer.addWidget(self.grid_scroll, 85)
+        # Zone principale (~85 %) : liste des cas (gauche) + détail (droite).
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._build_list_panel())
+        splitter.addWidget(self._build_detail_panel())
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([800, PANE_WIDTH])
+        outer.addWidget(splitter, 85)
 
+    def _build_list_panel(self) -> QWidget:
+        """Liste des cas : en-tête triable + lignes « titre / date », sans image."""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.case_tree = QTreeWidget()
+        self.case_tree.setObjectName("caseTree")
+        self.case_tree.setColumnCount(2)
+        self.case_tree.setHeaderLabels(["Titre", "Date"])
+        self.case_tree.setRootIsDecorated(False)
+        self.case_tree.setUniformRowHeights(True)
+        self.case_tree.setItemsExpandable(False)
+        self.case_tree.setExpandsOnDoubleClick(False)
+        self.case_tree.setAllColumnsShowFocus(True)
+        self.case_tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.case_tree.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # Ordre appliqué par `_populate` : un tri Qt relancerait un comparateur
+        # par paire, alors que la liste est déjà triée en amont.
+        self.case_tree.setSortingEnabled(False)
+        self.case_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.case_tree.customContextMenuRequested.connect(self._show_case_menu)
+        self.case_tree.currentItemChanged.connect(self._on_current_item_changed)
+        self.case_tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+
+        header = self.case_tree.header()
+        header.setObjectName("caseHeader")
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(False)
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.resizeSection(1, 96)
+        header.sectionClicked.connect(self._on_header_clicked)
+        self._update_sort_indicator()
+
+        layout.addWidget(self.case_tree, 1)
+
+        self._empty_label = QLabel("Aucun cas à afficher.")
+        self._empty_label.setObjectName("emptyState")
+        self._empty_label.setAlignment(Qt.AlignCenter)
+        self._empty_label.setVisible(False)
+        layout.addWidget(self._empty_label, 1)
+        return panel
+
+    def _build_detail_panel(self) -> QWidget:
+        """Panneau de détail : vignette en haut, informations complètes en dessous."""
+        panel = QWidget()
+        panel.setObjectName("casePane")
+        panel.setAttribute(Qt.WA_StyledBackground, True)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        # Vignette : cliquable pour le plein écran (même superposition que le Fil).
+        self.pane_image = ImageFrame()
+        self.pane_image.setFixedHeight(PANE_IMG_H)
+        self.pane_image.setToolTip("Cliquer pour afficher l'image en plein écran.")
+        self.pane_image.clicked.connect(self._open_fullscreen)
+        layout.addWidget(self.pane_image, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        container = QWidget()
+        info = QVBoxLayout(container)
+        info.setContentsMargins(0, 0, 0, 0)
+        info.setSpacing(6)
+
+        self.pane_title = QLabel()
+        self.pane_title.setObjectName("paneTitle")
+        self.pane_title.setWordWrap(True)
+        self.pane_title.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        info.addWidget(self.pane_title)
+
+        self.pane_meta = QLabel()
+        self.pane_meta.setObjectName("paneMeta")
+        self.pane_meta.setWordWrap(True)
+        self.pane_meta.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        info.addWidget(self.pane_meta)
+
+        self.pane_description = QLabel()
+        self.pane_description.setWordWrap(True)
+        self.pane_description.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        info.addWidget(self.pane_description)
+        info.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        self._show_selected_case(None)
+        return panel
+
+    # --- Chargement -------------------------------------------------------- #
     def reload_units(self) -> None:
         """Reconstruit le menu des unités (« Tous » en tête) en gardant la sélection."""
         while self.menu_layout.count():
@@ -1070,7 +1196,7 @@ class CaseBrowserPage(QWidget):
         self._unit_buttons[self._selected_unit or ""].setChecked(True)
 
     def _select_unit(self, value) -> None:
-        """Sélectionne une unité (``None`` = « Tout ») et rafraîchit la grille."""
+        """Sélectionne une unité (``None`` = « Tout ») et rafraîchit la liste."""
         if value == self._selected_unit:
             return
         self._selected_unit = value
@@ -1085,7 +1211,7 @@ class CaseBrowserPage(QWidget):
         self.reload_cases()
 
     def _set_visibility(self, value: str) -> None:
-        """Bascule entre cas publics et privés, puis recharge la grille."""
+        """Bascule entre cas publics et privés, puis recharge la liste."""
         button = self.visibility_buttons.get(value)
         if button is not None and not button.isChecked():
             button.setChecked(True)  # synchronise l'état visuel (ex : appel par code)
@@ -1109,146 +1235,176 @@ class CaseBrowserPage(QWidget):
         cases = [case for case in cases if unit in case.units] if unit is not None else cases
         types = checked_case_types(self.case_type_checkboxes)
         self._unit_cases = [case for case in cases if case.case_type in types]
-        self._refresh_grid()
+        self._refresh_list()
 
     def _on_case_type_changed(self) -> None:
-        """Un type de cas a été (dé)coché : recharge la grille."""
+        """Un type de cas a été (dé)coché : recharge la liste."""
         self.reload_cases()
 
     def _on_quick_search(self, text: str) -> None:
         """Filtre les cas affichés selon le nom saisi (après une courte pause)."""
         self._quick_text = text or ""
-        self._search_timer.start()  # reconstruit la grille après l'anti-rebond
+        self._search_timer.start()  # reconstruit la liste après l'anti-rebond
 
-    def _refresh_grid(self) -> None:
-        """Applique le filtre de recherche rapide et construit le 1er palier."""
+    def _refresh_list(self) -> None:
+        """Applique le filtre de recherche rapide, trie et remplit la liste."""
         needle = self._quick_text.strip().casefold()
         cases = [
             case for case in self._unit_cases
             if not needle or needle in case.title.casefold()
         ]
-        cases.sort(key=lambda case: case.title.casefold())
-        self._filtered = cases
+        self._filtered = self._sorted_cases(cases)
+        self._populate()
 
-        # Supprime les widgets précédents (vignettes ou message vide).
-        self._clear_grid()
-        for widget in self._card_widgets:
-            widget.deleteLater()
-        self._card_widgets = []
-        self._built = 0
-        if self._empty_label is not None:
-            self._empty_label.deleteLater()
-            self._empty_label = None
-
-        if not cases:
-            empty = QLabel("Aucun cas à afficher.")
-            empty.setAlignment(Qt.AlignCenter)
-            empty.setObjectName("emptyState")
-            self._empty_label = empty
-            self._layout_cards(force=True)
-            return
-        self._build_page()
-
-    def _build_page(self) -> None:
-        """Construit le palier suivant de vignettes (chargement progressif)."""
-        start = self._built
-        end = min(len(self._filtered), start + BROWSER_PAGE)
-        if start >= end:
-            return
-        self._card_widgets.extend(
-            self._make_card(case) for case in self._filtered[start:end]
-        )
-        self._built = end
-        self._layout_cards(force=True)
-        # Grille encore non défilable alors qu'il reste des cas : on complète,
-        # sinon le défilement (qui déclenche le palier suivant) ne viendrait pas.
-        if self._built < len(self._filtered):
-            QTimer.singleShot(0, self._fill_viewport)
-
-    def _fill_viewport(self) -> None:
-        """Complète la grille tant qu'elle tient entièrement dans la vue.
-
-        Utilise une estimation déterministe de la hauteur du contenu (et non la
-        position de l'ascenseur, pas encore calculée) : évite tout emballement.
-        """
-        if self._built >= len(self._filtered):
-            return
-        columns = max(1, self._columns)
-        rows = (self._built + columns - 1) // columns
-        estimated_height = rows * (CARD_IMG_H + 56)  # image + titre + espacement
-        if estimated_height < self.grid_scroll.viewport().height():
-            self._build_page()
-
-    def _on_grid_scroll(self, value: int) -> None:
-        """Prépare le palier suivant en approchant du bas de la grille."""
-        bar = self.grid_scroll.verticalScrollBar()
-        if bar.maximum() > 0 and value >= bar.maximum() - GRID_PREFETCH_PX:
-            self._build_page()
-
-    def _clear_grid(self) -> None:
-        """Détache tous les widgets de la grille (sans les détruire)."""
-        while self.grid_layout.count():
-            self.grid_layout.takeAt(0)
-
-    def _columns_for_width(self) -> int:
-        """Nombre de vignettes par ligne selon la largeur horizontale disponible."""
-        viewport = self.grid_scroll.viewport().width()
-        margins = self.grid_layout.contentsMargins()
-        spacing = self.grid_layout.spacing()
-        usable = viewport - margins.left() - margins.right()
-        return max(1, (usable + spacing) // (CARD_W + spacing))
-
-    def _layout_cards(self, *, force: bool = False) -> None:
-        """Replace les vignettes selon le nombre de colonnes courant."""
-        columns = self._columns_for_width()
-        if not force and columns == self._columns and self._card_widgets:
-            return  # rien à replacer : même largeur et des vignettes présentes
-        self._columns = columns
-        self._clear_grid()
-        if self._empty_label is not None:
-            self.grid_layout.addWidget(self._empty_label, 0, 0, 1, columns)
-            return
-        for i, widget in enumerate(self._card_widgets):
-            self.grid_layout.addWidget(widget, i // columns, i % columns)
-
-    def resizeEvent(self, event) -> None:  # noqa: N802 (nom imposé par Qt)
-        super().resizeEvent(event)
-        if hasattr(self, "grid_scroll"):
-            self._layout_cards()
-
-    def _make_card(self, case: storage.Case) -> QFrame:
-        """Vignette d'un cas : image (cliquable) + titre (sous l'image)."""
-        card = QFrame()
-        card.setFixedWidth(CARD_W)
-        card.setToolTip(case.title)
-        column = QVBoxLayout(card)
-        column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(4)
-
-        thumb = ClickableLabel()
-        thumb.setFixedSize(CARD_IMG_W, CARD_IMG_H)
-        thumb.setAlignment(Qt.AlignCenter)
-        thumb.setAttribute(Qt.WA_StyledBackground, True)
-        thumb.setCursor(Qt.PointingHandCursor)
-        thumb.setStyleSheet("background-color: black;")
-        thumb.clicked.connect(lambda c=case: self.case_activated.emit(c))
-        pixmap = thumbnails.load_thumbnail(case, CARD_IMG_W, CARD_IMG_H)
-        if pixmap.isNull():
-            thumb.setText("—")
-            thumb.setStyleSheet("background-color:black; color:#999;")
+    def _sorted_cases(self, cases: list) -> list:
+        """Tri courant : titre alphabétique ou date (ISO ⇒ ordre lexical correct)."""
+        if self._sort == SORT_DATE:
+            key = lambda case: (case.date_added or "", case.title.casefold())
         else:
-            thumb.setPixmap(pixmap)
-        column.addWidget(thumb, 0, Qt.AlignHCenter)
+            key = lambda case: (case.title.casefold(), case.date_added or "")
+        return sorted(cases, key=key, reverse=self._sort_desc)
 
-        title = QLabel(case.title)
-        title.setWordWrap(True)
-        title.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
-        title.setFixedWidth(CARD_W)
-        column.addWidget(title)
-        _enable_case_context_menu(
-            card, thumb, title, case=case, callback=self.case_context_menu.emit
+    def _populate(self) -> None:
+        """Reconstruit les lignes de la liste et restaure la sélection."""
+        previous_id = self._selected_case.id if self._selected_case is not None else ""
+        # Les signaux sont coupés : `clear()` viderait sinon la sélection ligne à
+        # ligne et rechargerait la vignette du panneau à chaque suppression.
+        self.case_tree.blockSignals(True)
+        self.case_tree.clear()
+        self._cases_by_item = {}
+        for case in self._filtered:
+            item = QTreeWidgetItem([case.title, _case_date_label(case)])
+            item.setToolTip(0, case.title)
+            # Date alignée à droite : les années restent en colonne.
+            item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+            self.case_tree.addTopLevelItem(item)
+            self._cases_by_item[id(item)] = case
+        self.case_tree.blockSignals(False)
+
+        has_cases = self.case_tree.topLevelItemCount() > 0
+        self.case_tree.setVisible(has_cases)
+        if self._empty_label is not None:
+            self._empty_label.setVisible(not has_cases)
+        if not has_cases:
+            self._show_selected_case(None)
+            return
+
+        # Sélection : on garde le cas courant s'il est encore là, sinon le premier.
+        target = None
+        for index in range(self.case_tree.topLevelItemCount()):
+            item = self.case_tree.topLevelItem(index)
+            case = self._cases_by_item.get(id(item))
+            if case is not None and case.id == previous_id:
+                target = item
+                break
+        if target is None:
+            target = self.case_tree.topLevelItem(0)
+        self.case_tree.setCurrentItem(target)
+
+    # --- Tri --------------------------------------------------------------- #
+    def _on_header_clicked(self, column: int) -> None:
+        """Clic sur l'en-tête : trie par cette colonne, ou inverse l'ordre."""
+        wanted = SORT_DATE if column == 1 else SORT_TITLE
+        if wanted == self._sort:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort = wanted
+            # Date : le plus récent d'abord (l'usage courant) ; titre : A → Z.
+            self._sort_desc = wanted == SORT_DATE
+        self.settings.browser_sort = self._sort
+        self.settings.browser_sort_desc = self._sort_desc
+        config.save_settings(self.settings)
+        self._update_sort_indicator()
+        self._refresh_list()
+
+    def _update_sort_indicator(self) -> None:
+        """Affiche la colonne de tri et son sens dans les libellés d'en-tête.
+
+        La flèche est écrite dans le libellé plutôt que confiée à l'indicateur
+        natif : collé au bord droit d'une colonne large, celui-ci semblait
+        appartenir à la colonne voisine.
+        """
+        arrow = "▼" if self._sort_desc else "▲"
+        title = "Titre " + arrow if self._sort == SORT_TITLE else "Titre"
+        date = "Date " + arrow if self._sort == SORT_DATE else "Date"
+        self.case_tree.setHeaderLabels([title, date])
+
+    # --- Sélection / panneau de détail ------------------------------------- #
+    def _on_current_item_changed(self, current, previous) -> None:
+        """Nouvelle ligne sélectionnée : met à jour le panneau de détail."""
+        case = self._cases_by_item.get(id(current)) if current is not None else None
+        self._show_selected_case(case)
+
+    def _on_item_double_clicked(self, item, column: int) -> None:
+        """Double-clic sur une ligne : ouvre directement le plein écran."""
+        case = self._cases_by_item.get(id(item))
+        if case is not None:
+            self.case_activated.emit(case)
+
+    def _show_case_menu(self, pos) -> None:
+        """Clic droit sur une ligne : menu contextuel du cas."""
+        item = self.case_tree.itemAt(pos)
+        if item is None:
+            return
+        case = self._cases_by_item.get(id(item))
+        if case is None:
+            return
+        self.case_tree.setCurrentItem(item)  # cible = le cas cliqué
+        self.case_context_menu.emit(case, self.case_tree.viewport().mapToGlobal(pos))
+
+    def _open_fullscreen(self) -> None:
+        """Clic sur la vignette du panneau : ouvre le plein écran du cas."""
+        if self._selected_case is not None:
+            self.case_activated.emit(self._selected_case)
+
+    def _show_selected_case(self, case) -> None:
+        """Remplit le panneau de détail (vignette + informations complètes)."""
+        self._selected_case = case
+        if case is None:
+            self.pane_image.clear_source()
+            self.pane_title.setText("Sélectionnez un cas")
+            self.pane_meta.setText("")
+            self.pane_description.setText("")
+            self.pane_description.setVisible(False)
+            return
+
+        self.pane_title.setText((case.title or "").strip() or "(sans titre)")
+        self.pane_meta.setText(self._meta_text(case))
+        description = (case.description or "").strip()
+        self.pane_description.setText(description)
+        self.pane_description.setVisible(bool(description))
+        # Une seule image, à la demande : le panneau affiche une vignette déjà
+        # mise en cache par le Fil (même boîte), jamais le plein format.
+        self.pane_image.set_pixmap(thumbnails.load_thumbnail(case, PANE_IMG_W, PANE_IMG_H))
+
+    @staticmethod
+    def _meta_text(case: storage.Case) -> str:
+        """Informations complètes du cas, une par ligne (tout est sélectionnable)."""
+        lines = []
+        if case.request_number:
+            lines.append(f"N° de demande : {case.request_number}")
+        lines.append("Unités : " + (", ".join(case.units or ()) or "—"))
+        type_emoji = (bootstrap.CASE_TYPE_EMOJI.get(case.case_type) or "").strip()
+        type_label = f"{type_emoji} {case.case_type}" if type_emoji else case.case_type
+        lines.append(f"Type : {type_label}")
+        visibility = (
+            "👤 Privé"
+            if case.visibility == storage.VISIBILITY_PRIVATE
+            else "👥 Public"
         )
-        return card
+        lines.append(f"Visibilité : {visibility}")
+        if case.author:
+            lines.append(f"Auteur : {case.author}")
+        moment = case.datetime
+        if moment is not None:
+            lines.append(
+                f"Ajouté le {moment.day:02d}.{moment.month:02d}.{moment.year}"
+                f" à {moment:%H:%M}"
+            )
+        if case.date_modified:
+            lines.append("Modifié le " + str(case.date_modified)[:16].replace("T", " "))
+        lines.append(f"#{case.id}")
+        return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -2077,8 +2233,9 @@ class MainWindow(QMainWindow):
         self.feed_tab_index = self.tabs.addTab(
             self._build_feed_tab(), f"{FEED_DOT_EMOJI} Fil d'actualité"
         )
-        # Onglet de navigation « Bibliothèque » : menu d'unités (gauche) + grille
-        # de vignettes. La bascule en bas du menu choisit cas publics / privés.
+        # Onglet de navigation « Bibliothèque » : filtres (gauche) + liste des cas
+        # (titre / date, en-tête triable) + panneau de détail à droite. La bascule
+        # en bas du menu choisit cas publics / privés.
         self.browser = CaseBrowserPage(settings, storage.VISIBILITY_PUBLIC)
         self.browser.case_activated.connect(self._show_case_detail)
         self.browser.case_context_menu.connect(self._on_browser_case_menu)

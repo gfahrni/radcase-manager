@@ -104,6 +104,16 @@ def stylesheet() -> str:
     ).name()
     return f"""
 QWidget#panelTop {{ border-top: 1px solid {border().name()}; }}
+QWidget#casePane {{ border-left: 1px solid {border().name()}; }}
+QTreeWidget#caseTree {{ border: none; }}
+QTreeWidget#caseTree::item {{ padding: 3px 2px; }}
+QTreeWidget#caseTree::item:selected {{ color: {highlighted_text}; }}
+QHeaderView#caseHeader::section {{ background: transparent; border: none;
+                                  border-bottom: 1px solid {border().name()};
+                                  padding: 5px 6px; color: {muted};
+                                  font-weight: bold; }}
+QLabel#paneTitle {{ font-weight: bold; font-size: 15px; }}
+QLabel#paneMeta {{ color: {muted}; }}
 QLabel#sectionTitle {{ color: {muted}; font-weight: bold; }}
 QLabel#emptyState {{ color: {muted}; padding: 24px; }}
 QLabel#hintLabel {{ color: {muted}; }}

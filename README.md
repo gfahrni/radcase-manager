@@ -239,8 +239,12 @@ Conçue pour rester fluide avec des **milliers de cas** sur un dossier réseau :
 - les images ne sont **jamais** décodées en plein format pour l'affichage : des
   vignettes sont calculées une fois à la taille d'affichage et mises en cache
   localement (`settings_data/thumbs/`, reconstructible, hors du partage) ;
-- la Bibliothèque et le Fil ne construisent que la **fenêtre visible** et
-  complètent au défilement (mémoire bornée) ;
+- la **Bibliothèque** est une **liste sans vignette** (titre + date, triable par
+  l'en-tête) : aucune image n'est décodée à l'ouverture. Le panneau de droite
+  n'en charge qu'**une seule**, à la sélection (vignette cliquable pour le plein
+  écran, informations complètes en dessous) ;
+- le **Fil** ne construit que la **fenêtre visible** et complète au défilement
+  (mémoire bornée) ;
 - le **Fil d'actualité** se complète tout seul : toutes les 2 minutes, les cas
   arrivés dans les unités suivies sont **ajoutés en bas**, sans reconstruire la
   vue ni déplacer la lecture. Si vous êtes déjà en bas, ils apparaissent
@@ -250,7 +254,8 @@ Conçue pour rester fluide avec des **milliers de cas** sur un dossier réseau :
   et les auteurs/unités sont lus par requête SQL ciblée.
 
 Ordre de grandeur (213 cas, disque local) : ouverture ~0,3 s, changement d'onglet
-~0,05 s. Détails dans `ARCHITECTURE_PLAN.md`.
+~0,05 s. La liste de la Bibliothèque se remplit à ~3 ms pour 1 000 cas (sans
+image). Détails dans `ARCHITECTURE_PLAN.md`.
 
 ## Tests backend (sans interface)
 
@@ -298,3 +303,5 @@ python updater.py download    # télécharge l'exécutable dans le dossier coura
 - [x] Lancement automatique à l'ouverture de session Windows (réduit dans la zone
   de notification) — voir `autostart.py`
 - [x] OCR natif Windows à l'enregistrement, en tâche de fond — voir `ocr.py`
+- [x] Bibliothèque en liste triable (titre / date) + panneau de détail avec
+  vignette à la demande — voir `main_gui.py` (`CaseBrowserPage`)

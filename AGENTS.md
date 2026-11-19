@@ -128,8 +128,14 @@ presse-papiers, dans un **dossier réseau partagé**.
 - `version.py` : version de l'application, **inscrite par la CI** au build à partir
   du tag ; un binaire de développement (``…dev``) désactive la mise à jour.
 - `main_gui.py` : interface PySide6 (onglets « Nouveau cas » / « Consulter »).
-  Bibliothèque et Fil en **chargement progressif** (seule la fenêtre visible est
-  construite) ; recherche rapide avec anti-rebond.
+  La **Bibliothèque** est une **liste sans vignette** (titre + date) avec un
+  en-tête cliquable qui trie par titre ou par date (choix mémorisé :
+  `browser_sort` / `browser_sort_desc`) ; le **panneau de droite** (`QSplitter`)
+  montre la vignette en haut (cliquable pour le plein écran) puis les
+  informations complètes. Une seule image est chargée, à la sélection, dans la
+  même boîte que le Fil pour partager le cache (`PANE_IMG_W/H` =
+  `FEED_IMG_W/H`). Le **Fil** reste en chargement progressif (`FEED_PAGE`).
+  Recherche rapide avec anti-rebond.
   Le **Fil ouvert se met à jour tout seul** : le passage périodique
   (`FEED_BADGE_INTERVAL_MS`, 2 min) qui met à jour le badge ajoute les cas arrivés
   (`FeedView.append_cases`, insertion **incrémentale** — pas de `load()` complet,

@@ -109,6 +109,10 @@ DEFAULT_SETTINGS = {
     "shared_root": "",
     "last_units": [],
     "last_browser_unit": "",
+    #: Tri de la liste de la Bibliothèque : "title" (alphabétique) ou "date".
+    "browser_sort": "title",
+    #: Ordre du tri de la Bibliothèque (pour la date : plus récent d'abord).
+    "browser_sort_desc": False,
     "feed_units": None,
     "feed_last_seen": "",
     #: Vérifier l'existence d'une nouvelle version au démarrage (au plus 1×/24 h).
@@ -145,6 +149,11 @@ class Settings:
     last_units: list = field(default_factory=list)
     #: Dernière unité sélectionnée dans l'onglet « Bibliothèque » ("" = toutes).
     last_browser_unit: str = ""
+    #: Tri de la liste de la Bibliothèque : ``"title"`` (alphabétique) ou
+    #: ``"date"``. Mémorisé par poste, comme le reste des réglages.
+    browser_sort: str = "title"
+    #: Sens du tri (``True`` = décroissant ; pour la date, le plus récent d'abord).
+    browser_sort_desc: bool = False
     #: Unités suivies dans le « Fil d'actualité » (``None`` = tout coché par défaut).
     feed_units: list | None = None
     #: Horodatage de la dernière visite du fil (soft reset du badge de nouveauté).
@@ -191,6 +200,10 @@ def load_settings() -> Settings:
         settings.shared_root = ""
     if not isinstance(settings.last_units, list):
         settings.last_units = []
+    if settings.browser_sort not in ("title", "date"):
+        settings.browser_sort = "title"
+    if not isinstance(settings.browser_sort_desc, bool):
+        settings.browser_sort_desc = False
     if not isinstance(settings.feed_last_seen, str):
         settings.feed_last_seen = ""
     if not isinstance(settings.auto_check_updates, bool):
