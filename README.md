@@ -96,11 +96,22 @@ Gestes courants :
 
 ## Où sont mes données ?
 
-Dans le **dossier partagé** choisi au premier lancement : c'est lui qui contient
-les cas, et rien ne les recopie ailleurs. L'application n'envoie aucune donnée
-patient sur Internet — la seule connexion sortante sert à vérifier les mises à
-jour. Les réglages, l'index de recherche et les vignettes restent dans le profil
-Windows du poste.
+Les cas — images et descriptions — sont des **fichiers dans le dossier partagé**
+choisi au premier lancement, sur le serveur de fichiers du service. Seules les
+personnes qui ont accès à ce dossier les voient ; l'application ne les envoie
+nulle part ailleurs.
+
+**Rien ne transite par Internet.** Pas de cloud, pas de compte en ligne, pas de
+synchronisation : le programme n'émet qu'une seule connexion sortante, la
+vérification des mises à jour, et elle ne transporte aucune donnée patient.
+
+Sur le poste, il n'y a que des données techniques, toutes reconstructibles :
+réglages, index de recherche et miniatures d'affichage, dans le profil Windows.
+Le dossier partagé reste la seule source de vérité — si vous supprimez ce
+profil, aucun cas n'est perdu.
+
+Un export CSV / Excel est écrit là où vous le choisissez : c'est à vous de le
+ranger.
 
 ## Problèmes courants
 
