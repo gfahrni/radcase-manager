@@ -229,7 +229,7 @@ presse-papiers, dans un **dossier réseau partagé**.
 ## Commandes
 - Installer : `pip install -r requirements.txt` (environnement `.venv`).
 - Lancer : `python main_gui.py`.
-- Tester le backend sans GUI : voir `README.md`.
+- Tester le backend sans GUI : voir `DEVELOPMENT.md`.
 
 ## Publication GitHub
 - Dépôt distant : **`gfahrni/radcase-manager`** (branche `main`), public.

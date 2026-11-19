@@ -1,310 +1,114 @@
 <p align="center">
-  <img src="logo.png" alt="RadCase Manager" width="160">
+  <img src="logo.png" alt="RadCase Manager" width="140">
 </p>
 
-# RadCase Manager
+<h1 align="center">RadCase Manager</h1>
 
-Application de bureau légère pour cataloguer des cas cliniques radiologiques à
-partir d'images collées depuis le presse-papiers, dans un **dossier réseau
-partagé**.
+<p align="center">
+  Catalogue de cas radiologiques partagé, sans serveur ni cloud.
+</p>
 
-## Principe
+<p align="center">
+  <a href="https://github.com/gfahrni/radcase-manager/releases/latest"><img src="https://img.shields.io/github/v/release/gfahrni/radcase-manager?label=version" alt="Version"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4" alt="Windows 10 / 11">
+  <img src="https://img.shields.io/badge/donn%C3%A9es-dossier%20partag%C3%A9-informational" alt="Données : dossier partagé">
+</p>
 
-- **Un cas = un dossier** dans le dossier partagé :
-  `cases/<AAAA-MM>/<id>/case.md` + `image.jpg`.
-- **Images compressées** : l'image collée est ré-encodée en **JPEG** (qualité
-  `storage.IMAGE_QUALITY`, 98 par défaut) à l'enregistrement — typiquement 2 à
-  5 fois plus léger qu'un PNG, sans perte visible. Aucune dépendance ajoutée :
-  l'encodage est assuré par Qt. Les cas antérieurs (`image.png`) restent
-  parfaitement lisibles (le nom du fichier est relu dans le `case.md`).
-- **Cas figés** (append-only) : on n'écrit jamais deux fois le même cas, ce qui
-  évite tout conflit de verrou sur le partage réseau.
-- **Écriture atomique** : dossier temporaire `.tmp_<id>` puis renommage.
-- **Réactions anonymes** : chaque carte du Fil porte un bouton **« ➕ »** qui
-  déploie les 7 emojis (`👍 👀 ⭐ 😨 😅 😮 🔥`) ; seuls les emojis **déjà
-  posés** (compteur > 0) s'affichent ensuite à côté du bouton, donc aucun
-  emoji n'encombre le Fil tant que personne n'a réagi. Chaque utilisateur en
-  pose **un seul par cas** :
-  re-cliquer le même emoji le retire, en cliquer un autre le remplace. Les
-  réactions vivent **hors des dossiers de cas**, dans `reactions/` à la racine
-  du partage (un fichier JSON par utilisateur, écriture atomique) : les cas
-  restent figés, et deux personnes ne peuvent pas écraser leurs réactions
-  mutuelles. Seuls les compteurs sont affichés, jamais les noms.
-- **OCR natif Windows** : le texte de l'image (IPP, annotations…) est lu à
-  l'enregistrement par `Windows.Media.Ocr`, sans moteur externe ni réseau. Le
-  texte est stocké dans `case.md` (`ocr_text` / `ocr_status`) et ajouté à
-  l'index local. La lecture et l'écriture se font dans un thread de fond : la
-  fenêtre ne se fige jamais, et un échec OCR n'empêche pas l'enregistrement.
-- **Numéro de demande** : extrait en priorité par un **OCR ciblé** sur le coin
-  supérieur gauche de l'image (20 % × 20 %, agrandi ×3), avec repli sur le texte
-  OCR complet. Règle : au moins 10 lettres/chiffres consécutifs, préfixe `L`,
-  `R` ou `E`, au moins 8 chiffres ; un `1` initial est corrigé en `L`. Stocké
-  dans `case.md` (`request_number`), affiché à droite du titre dans le plein
-  écran et dans la Recherche Avancée, et exporté dans une colonne dédiée. Il
-  est prérempli et corrigeable dans l'onglet Édition.
-- **Dossier partagé obligatoire** : le chemin est choisi (ou confirmé) au
-  premier lancement dans le dialogue de réglages, puis modifiable.
-- **Visibilité** : chaque cas est `public` (défaut) ou `privé`. Un cas privé
-  n'apparaît dans la recherche que pour son auteur.
-- **Réglages locaux** dans `settings_data/settings.json`, dans le profil de
-  l'utilisateur système (`%LOCALAPPDATA%\RadCaseManager\` sous Windows) : jamais
-  sur le partage, et propres à chaque compte machine.
+RadCase Manager permet à une équipe de radiologues de constituer et de consulter
+ensemble une bibliothèque de cas cliniques. On colle une capture d'écran du PACS,
+on décrit le cas, il rejoint le catalogue partagé du service — et il est
+immédiatement visible des collègues.
 
-Voir `ARCHITECTURE_PLAN.md` pour la justification détaillée (et pourquoi pas SQLite).
+## Ce qu'il fait
+
+- **Coller et enregistrer** : `Ctrl+V` dans *Nouveau cas*, un titre, une
+  description, des unités, et c'est catalogué.
+- **Dossier partagé** : chaque cas est un dossier autonome (image +
+  description) dans le dossier réseau du service. Pas de serveur, pas de base de
+  données, pas de compte à créer.
+- **Fil d'actualité** : les derniers cas des unités que vous suivez, avec une
+  pastille quand du nouveau arrive.
+- **Bibliothèque** : liste triable par titre ou par date ; le cas sélectionné
+  s'affiche à droite, image cliquable pour le plein écran et informations
+  complètes.
+- **Recherche avancée** : unités, auteur, période, type de cas, texte ; export
+  CSV / Excel des résultats.
+- **Lecture du texte des images** : le numéro de demande est reconnu **sur le
+  poste**, à l'enregistrement — aucun envoi sur Internet.
+- **Réactions anonymes** : un emoji par cas et par personne, seuls les compteurs
+  sont affichés, jamais les noms.
 
 ## Installation
 
-```bash
-python -m venv .venv
-source .venv/bin/activate      # Windows : .venv\Scripts\activate
-pip install -r requirements.txt
-```
+1. Téléchargez `RadCaseManager.exe` dans les
+   [Releases](https://github.com/gfahrni/radcase-manager/releases/latest).
+2. Posez-le où vous voulez — le Bureau convient.
+3. Double-cliquez.
 
-## Lancement
+Rien à installer, aucun droit administrateur. Windows 10 ou 11, 64 bits :
+l'application est un fichier unique, ses réglages restent sur le poste.
 
-```bash
-python main_gui.py
-```
+> Windows peut afficher un avertissement au premier lancement (exécutable non
+> signé) : *Informations complémentaires* → *Exécuter quand même*.
 
-Au premier lancement, une fenêtre demande le chemin du dossier partagé ; le nom
-d'auteur est repris automatiquement du compte Windows de la session (ajouté à la
-liste partagée s'il est inconnu). Le dossier est ensuite initialisé
-automatiquement (`cases/`, `units.json`, `users.json`, `README.md`).
+## Premier lancement
 
-## Binaire portable Windows (.exe)
+- Le **nom d'auteur** est repris du compte Windows de la session.
+- Choisissez le **dossier partagé** du service (sur un poste préparé, le chemin
+  est déjà proposé).
+- Les réglages sont enregistrés **sur ce poste uniquement**, jamais dans le
+  dossier partagé : deux personnes peuvent utiliser le même `.exe` sans
+  partager leurs préférences.
 
-PyInstaller **ne compile pas de façon croisée** : l'exécutable Windows doit être
-produit *sur Windows* (ou via une machine/CI Windows). Trois voies possibles :
+## Utilisation
 
-### 1. Sur un poste Windows (le plus simple)
-
-Double-cliquer sur `build_windows.bat` (Python 3.10+ 64 bits requis). Le script
-crée `.venv`, installe les dépendances, puis génère :
-
-```
-dist\RadCaseManager.exe
-```
-
-Ce fichier unique est autonome : le copier où bon vous semble. Les réglages
-(`settings_data/settings.json`) et l'index local se créent automatiquement dans
-le **profil de l'utilisateur** (`%LOCALAPPDATA%\RadCaseManager\`), et non à côté
-du `.exe` : plusieurs comptes Windows peuvent donc partager le même `.exe` sans
-partager leurs réglages. Le nom d'auteur est celui du compte Windows de la
-session ; il est enregistré dans la liste partagée `users.json` et n'est choisi
-que parmi les utilisateurs connus. Pour le déployer en réseau, le placer dans un
-dossier accessible en lecture par les postes (le `.exe` n'a pas besoin d'être
-« installé »).
-
-### 2. Construction manuelle (Windows)
-
-```bat
-py -3 -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-pip install "pyinstaller>=6.0"
-pyinstaller --clean --noconfirm RadCaseManager.spec
-```
-
-La configuration de build est décrite dans `RadCaseManager.spec` (application
-fenêtrée, `console=False`, exclusion des gros modules Qt inutilisés).
-
-### 3. Sans machine Windows (GitHub Actions)
-
-Le workflow `.github/workflows/build-windows.yml` construit l'exécutable sur un
-runner Windows GitHub et le publie comme artefact téléchargeable. Il s'exécute
-manuellement (onglet *Actions* → *Run workflow*) ou au push d'un tag `v*`, auquel
-cas il crée aussi une **release GitHub** avec le `.exe` attaché.
-
-Exemple pour publier une version :
-
-```bash
-git tag -a v3.5 -m "RadCase Manager v3.5"
-git push origin v3.5
-```
-
-## Mise à jour automatique
-
-L'application installée se met à jour **d'elle-même** depuis les releases GitHub
-(module `updater.py`) : les radiologues n'ont rien à télécharger ni à lire.
-
-- Au démarrage, elle vérifie en tâche de fond la **dernière release publiée** (au
-  plus une fois par jour) : le tag est lu via la redirection de
-  `/releases/latest`, ce qui n'est soumis à aucun quota d'API.
-- Si une version plus récente existe, elle propose de la télécharger (menu
-  **Aide → Vérifier les mises à jour…** pour forcer la vérification).
-- Le téléchargement **et** la sauvegarde transitent par
-  `%LOCALAPPDATA%\RadCaseManager\updates\`, **hors du dossier de l'application** :
-  le Bureau (ou le dossier du `.exe`) ne montre donc **jamais** plus d'une icône,
-  même pendant le téléchargement.
-- Le nouvel exécutable **prend la place** de l'ancien par **déplacement** (Windows
-  interdit d'écraser un `.exe` en cours d'exécution, mais autorise à le renommer).
-  L'ancien reste dans le dossier de transit comme **sauvegarde de retour arrière**,
-  et n'est remplacé qu'à la mise à jour suivante — ce qui évite tout verrou de
-  fichier. Aucun script externe n'est lancé : tout se passe dans le processus déjà
-  autorisé à s'exécuter.
-- Si un fichier de mise à jour traîne à côté de l'exécutable (reste des versions
-  antérieures à la v4.2), il est **mis à la corbeille** au démarrage, avec des
-  réessais différés : un antivirus peut tenir le fichier quelques instants.
-- Si l'utilisateur répond « Plus tard », la proposition est **reportée d'un mois** ;
-  un indicateur **« ⬆ Mise à jour disponible (vX) »** reste alors affiché en bas à
-  droite — un clic relance la proposition. Une version encore plus récente l'emporte
-  sur le report.
-
-La version embarquée est **inscrite par la CI** dans `version.py` au moment du
-build, à partir du tag. Un binaire de développement (version contenant `dev`, ou
-exécution depuis les sources) ne vérifie jamais les mises à jour.
-
-> Déploiement : l'exécutable est posé sur le **Bureau** de chaque utilisateur,
-> seul emplacement où les applications sont autorisées à s'exécuter. Comme le
-> Bureau est modifiable, l'application peut s'y remplacer elle-même sans droits
-> administrateur. Voir `AUTO_UPDATE_PLAN.md`.
-
-## Mode « barre d'état système » (zone de notification)
-
-Fermer la fenêtre **n'arrête pas** l'application : comme la plupart des petites
-applications portables, elle **se réduit dans la zone de notification** (le carré
-à côté de l'horloge) et continue de tourner. Un clic sur son icône la rouvre ;
-
-- **Ouvrir** — ramène la fenêtre au premier plan ;
-- **Réglages…** — ouvre la configuration ;
-- **Quitter** — arrête vraiment l'application (également dans **Fichier → Quitter**).
-
-Au premier passage en zone de notification, une bulle explique que l'application
-tourne toujours (l'icône peut être cachée derrière le « ^ » de Windows 11).
-
-- **Pastille de nouveauté** : quand le **Fil d'actualité** contient des cas arrivés
-  depuis la dernière visite, l'icône se pare d'un **point rouge** et son infobulle
-  indique le nombre (`3 nouveaux cas`). Elle redevient normale dès que l'onglet
-  « Fil d'actualité » est ouvert, et — s'il était déjà affiché — dès que les cas
-  sont lus : elle s'éteint en même temps que le compteur de l'onglet et le retour
-  du fond des cartes, sans attendre un changement d'onglet. Le signal suit les
-  mêmes règles que le Fil (unités suivies, hors vos propres cas) ; il ne s'affiche
-  donc pas pour un cas déposé dans une unité que vous ne suivez pas.
-- **Bannière système** : au passage de « rien de neuf » à « du nouveau », et
-  **seulement si la fenêtre est masquée**, Windows affiche une notification
-  (`Nouveau cas dans le Fil` / `US — TDM thoracique`). Un clic dessus ramène la
-  fenêtre directement sur le Fil. Une seule bannière par vague, jamais une par cas.
-  Elle peut être coupée par Windows (*Ne pas déranger*) : la pastille rouge, elle,
-  reste fiable.
-- Le comportement est **réglable** : *Réglages… → Fenêtre* ; décoché, fermer la
-  fenêtre arrête l'application comme avant.
-- **Un seul lancement à la fois** : si l'application tourne déjà, double-cliquer
-  sur l'exécutable ne crée pas de second processus — il **réveille** la fenêtre
-  existante. Cela évite deux icônes et deux écritures simultanées dans le dossier
-  partagé. Le verrou est propre à chaque **compte machine** : sur un poste utilisé
-  par plusieurs personnes (sessions simultanées), chacun a bien la sienne. Sous
-  Windows, l'exclusivité est garantie par un **mutex nommé** libéré par le système
-  à l'arrêt du processus (le canal local ne sert qu'au réveil : `listen()` y
-  réussit toujours, il ne peut pas faire office de verrou).
-
-## Démarrage automatique à l'ouverture de session
-
-Pour qu'un poste soit prêt sans que personne ait à y penser, l'application peut se
-**lancer toute seule après un redémarrage** — *Réglages… → Démarrage* (activée par
-défaut). Elle démarre alors **réduite dans la zone de notification** : prête à
-recevoir une image collée, sans imposer sa fenêtre à l'ouverture de session.
-
-- Techniquement, l'application s'inscrit dans la clé **`Run` du compte courant**
-  (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), la même que celle listée
-  par Windows dans « Applications de démarrage » : **aucun droit administrateur** ;
-- l'entrée est **réécrite à chaque lancement** avec le chemin courant de
-  l'exécutable : déplacer le `.exe` ne casse pas le démarrage automatique ;
-- elle vaut pour le **compte Windows** concerné, pas pour tout le poste ; décocher
-  l'option retire l'entrée (l'application n'est plus lancée automatiquement).
-
-Voir `autostart.py`.
-
-## Structure du projet
-
-| Fichier | Rôle |
+| Onglet | À quoi ça sert |
 |---|---|
-| `config.py` | réglages locaux et chemins |
-| `bootstrap.py` | initialisation du dossier partagé |
-| `storage.py` | création atomique, lecture et recherche des cas |
-| `reactions.py` | réactions anonymes du Fil (stockage JSON hors des cas) |
-| `ocr.py` | OCR natif Windows, en tâche de fond (`Windows.Media.Ocr`) |
-| `thumbnails.py` | cache local des vignettes d'affichage |
-| `theme.py` | couleurs dérivées du thème Windows (clair / sombre) |
-| `tray.py` | zone de notification (icône + menu) et verrou mono-instance |
-| `autostart.py` | inscription au démarrage de Windows (clé `Run` du compte) |
-| `updater.py` | mise à jour automatique depuis les releases GitHub |
-| `version.py` | version de l'application (inscrite par la CI au build) |
-| `main_gui.py` | interface PySide6 |
+| ➕ **Nouveau cas** | Coller l'image, décrire, choisir les unités, enregistrer. |
+| ⚪ **Fil d'actualité** | Les derniers cas des unités suivies ; les cas non lus sont surlignés. |
+| 📖 **Bibliothèque** | Tous les cas, par unité, triables par titre ou par date ; détail à droite. |
+| 🔎 **Recherche avancée** | Recherche multi-critères et export des résultats. |
 
-## Performances
+Gestes courants :
 
-Conçue pour rester fluide avec des **milliers de cas** sur un dossier réseau :
+- `Ctrl+V` importe l'image du presse-papiers.
+- Un **clic** sur une image l'ouvre en plein écran (`Échap` ferme).
+- Un **clic droit** sur un cas permet de le modifier ou de le supprimer : le
+  vôtre dans le Fil et la Bibliothèque, n'importe lequel dans la Recherche
+  avancée.
+- La **recherche rapide** de la Bibliothèque filtre par titre au fil de la
+  frappe.
 
-- les images ne sont **jamais** décodées en plein format pour l'affichage : des
-  vignettes sont calculées une fois à la taille d'affichage et mises en cache
-  localement (`settings_data/thumbs/`, reconstructible, hors du partage) ;
-- la **Bibliothèque** est une **liste sans vignette** (titre + date, triable par
-  l'en-tête) : aucune image n'est décodée à l'ouverture. Le panneau de droite
-  n'en charge qu'**une seule**, à la sélection (vignette cliquable pour le plein
-  écran, informations complètes en dessous) ;
-- le **Fil** ne construit que la **fenêtre visible** et complète au défilement
-  (mémoire bornée) ;
-- le **Fil d'actualité** se complète tout seul : toutes les 2 minutes, les cas
-  arrivés dans les unités suivies sont **ajoutés en bas**, sans reconstruire la
-  vue ni déplacer la lecture. Si vous êtes déjà en bas, ils apparaissent
-  directement ; sinon une pastille **« ↓ N nouveaux cas »** vous invite à les
-  rejoindre (un clic ramène au plus récent) ;
-- l'index local est **scanné en tâche de fond** (thread dédié), jamais dans le
-  thread de l'interface : changer d'onglet affiche immédiatement l'index courant,
-  puis la vue se rafraîchit quand le parcours du partage est terminé (sans
-  reconstruire la liste ni déplacer la lecture si rien n'a changé). Les lectures
-  rapprochées restent anti-rebondies (un seul scan par rafale), et les
-  auteurs/unités sont lus par requête SQL ciblée.
+## Vie de l'application
 
-Ordre de grandeur (213 cas, disque local) : ouverture ~0,3 s, changement d'onglet
-~0,05 s. La liste de la Bibliothèque se remplit à ~3 ms pour 1 000 cas (sans
-image). Détails dans `ARCHITECTURE_PLAN.md`.
+- Fermer la fenêtre **réduit** l'application dans la zone de notification ;
+  « Quitter » l'arrête vraiment.
+- Elle peut **démarrer avec Windows**, réduite, prête à recevoir une image.
+- Elle se **met à jour toute seule** depuis GitHub, en tâche de fond (une fois
+  par jour au plus) : rien à télécharger à la main.
+- **Un seul lancement à la fois** : relancer l'exécutable ramène simplement la
+  fenêtre existante.
 
-## Tests backend (sans interface)
+## Où sont mes données ?
 
-Le module `storage` est utilisable directement :
+Dans le **dossier partagé** choisi au premier lancement : c'est lui qui contient
+les cas, et rien ne les recopie ailleurs. L'application n'envoie aucune donnée
+patient sur Internet — la seule connexion sortante sert à vérifier les mises à
+jour. Les réglages, l'index de recherche et les vignettes restent dans le profil
+Windows du poste.
 
-```python
-import storage
-case = storage.create_case(
-    title="Scanner thoracique",
-    units=["Thorax"],
-    author="Dr Martin",
-    description="Exemple.",
-    image=None,
-    shared_root="/chemin/vers/dossier/partage",
-    visibility="public",   # ou "private" : visible du seul auteur
-    ocr=True,              # Windows uniquement ; échec non bloquant
-)
-print(case.folder, case.ocr_status)
-```
+## Problèmes courants
 
-L'OCR est désactivé hors Windows (statut `unsupported`). Sur Windows, il dépend
-du pack de langue OCR installé (`Paramètres → Langue → Reconnaissance optique de
-caractères`) ; le français est utilisé lorsqu'il est disponible, sinon le
-premier pack installé.
+- **« Dossier introuvable »** : le partage réseau n'est pas monté, ou le chemin a
+  changé → *Fichier → Réglages…*.
+- **Pas de numéro de demande détecté** : l'OCR de Windows n'est pas installé, ou
+  l'image est trop floue / trop petite ; le champ reste modifiable dans l'onglet
+  Édition.
+- **Une mise à jour a échoué** : relancez l'application, la nouvelle version
+  sera proposée à nouveau.
 
-Le module `updater` se teste également en ligne de commande :
+## Développement
 
-```bash
-python updater.py check       # version locale vs dernière release publiée
-python updater.py download    # télécharge l'exécutable dans le dossier courant
-```
-
-## Feuille de route
-
-- [x] Fondation (structure + réglages)
-- [x] Moteur de données (création atomique + recherche)
-- [x] Interface (saisie + consultation)
-- [x] Binaire portable Windows (PyInstaller) — voir `build_windows.bat`
-- [x] Mise à jour automatique depuis les releases GitHub — voir `updater.py` et
-  `AUTO_UPDATE_PLAN.md`
-- [x] Mode « barre d'état système » (réduction dans la zone de notification) et
-  verrou mono-instance — voir `tray.py`
-- [x] Pastille rouge dans la zone de notification quand le Fil a du nouveau — voir
-  `tray.py` (`badged_icon`, `set_alert`)
-- [x] Lancement automatique à l'ouverture de session Windows (réduit dans la zone
-  de notification) — voir `autostart.py`
-- [x] OCR natif Windows à l'enregistrement, en tâche de fond — voir `ocr.py`
-- [x] Bibliothèque en liste triable (titre / date) + panneau de détail avec
-  vignette à la demande — voir `main_gui.py` (`CaseBrowserPage`)
+- Installation, build du `.exe`, tests : [DEVELOPMENT.md](DEVELOPMENT.md)
+- Architecture et choix techniques : [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md)
+- Mises à jour automatiques : [AUTO_UPDATE_PLAN.md](AUTO_UPDATE_PLAN.md)
