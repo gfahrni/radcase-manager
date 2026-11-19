@@ -1,4 +1,4 @@
-# 🎯 RadCase Manager — Architecture V3
+# 🎯 RadCase Manager — Architecture
 
 Application de bureau légère permettant aux radiologues de cataloguer rapidement
 des cas cliniques à partir d'images collées depuis le presse-papiers, dans un
@@ -11,7 +11,7 @@ anti-pattern** : les base SQLite sur partage réseau (SMB/NFS) ne peuvent pas
 s'appuyer sur des verrous fiables, et une écriture concurrente depuis deux postes
 peut **corrompre tout le fichier**.
 
-La V3 exploite une caractéristique clé du besoin : **les cas sont figés**
+Cette architecture exploite une caractéristique clé du besoin : **les cas sont figés**
 (append-only, jamais modifiés). Dans ce contexte :
 
 - Chaque nouveau cas = **un nouveau dossier au nom unique** → deux postes qui
@@ -336,7 +336,7 @@ Points d'implémentation :
 - `sqlite3` (stdlib, utilisé pour l'index local `settings_data/index.db`)
 - `urllib` (stdlib, utilisé pour les mises à jour — aucune dépendance ajoutée)
 
-## 🏁 Roadmap V3
+## 🏁 Roadmap
 
 1. **Phase 1 — Fondation** : `config.py`, `bootstrap.py`, structure partagée.
 2. **Phase 2 — Moteur** : `storage.py` (création atomique + lecture + recherche).

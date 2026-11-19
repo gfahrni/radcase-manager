@@ -1,4 +1,4 @@
-"""Cache local de vignettes, dérivées des images de cas (V3).
+"""Cache local de vignettes, dérivées des images de cas.
 
 Objectif : **ne jamais décoder une image plein format pour l'affichage**. Une
 vignette est calculée une seule fois à la taille d'affichage, stockée dans le

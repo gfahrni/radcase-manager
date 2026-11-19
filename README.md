@@ -2,7 +2,7 @@
   <img src="logo.png" alt="RadCase Manager" width="160">
 </p>
 
-# RadCase Manager (V3)
+# RadCase Manager
 
 Application de bureau légère pour cataloguer des cas cliniques radiologiques à
 partir d'images collées depuis le presse-papiers, dans un **dossier réseau

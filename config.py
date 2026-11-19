@@ -1,4 +1,4 @@
-"""Configuration locale de RadCase Manager (V3).
+"""Configuration locale de RadCase Manager.
 
 Les réglages propres au poste (nom d'utilisateur, chemin du dossier partagé) et
 l'index local sont stockés dans le **profil de l'utilisateur système** :

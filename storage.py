@@ -1,4 +1,4 @@
-"""Cœur de données de RadCase Manager (V3).
+"""Cœur de données de RadCase Manager.
 
 Source de vérité : un dossier par cas dans le dossier partagé ::
 

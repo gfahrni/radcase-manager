@@ -1,4 +1,4 @@
-"""Mise à jour automatique depuis les releases GitHub (V3).
+"""Mise à jour automatique depuis les releases GitHub.
 
 Principe (détails et justification dans ``AUTO_UPDATE_PLAN.md``) :
 
