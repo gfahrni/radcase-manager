@@ -56,6 +56,7 @@ from PySide6.QtWidgets import (
 import autostart
 import bootstrap
 import config
+import deployment
 import ocr
 import reactions
 import storage
@@ -504,6 +505,32 @@ class ImageFrame(QLabel):
             self.clicked.emit()
 
 
+class IndexRefreshWorker(QObject):
+    """Met à jour l'index local (scan du partage) hors du thread de l'interface.
+
+    Le parcours de ``cases/`` est l'opération la plus lente de l'application sur
+    un dossier réseau. Il ne doit jamais figer la fenêtre : un thread dédié le
+    fait, et la vue se rafraîchit quand il a terminé.
+    """
+
+    #: Nombre de cas indexés après le scan.
+    done = Signal(int)
+    #: Message d'erreur (best-effort : la vue garde l'index existant).
+    failed = Signal(str)
+
+    def __init__(self, shared_root: str):
+        super().__init__()
+        self._shared_root = shared_root
+
+    def run(self) -> None:
+        try:
+            count = storage.refresh_index(self._shared_root)
+        except Exception as exc:  # noqa: BLE001 - remonté à l'interface
+            self.failed.emit(str(exc))
+            return
+        self.done.emit(count)
+
+
 class ClickableLabel(QLabel):
     """Étiquette cliquable (ouvre le détail au clic sur une image).
 
@@ -870,6 +897,10 @@ FEED_STICK_PX = 8
 #: Marge (px) entre la pastille « ↓ N nouveaux cas » et le bas du fil.
 FEED_PILL_MARGIN = 16
 
+#: Part de la carte qui doit être visible pour qu'elle ne soit plus « nouvelle »
+#: (fond bleu). « Dépasse » est strict : exactement la moitié ne suffit pas.
+FEED_READ_VISIBLE_RATIO = 0.5
+
 #: Ancrages temporels du fil : (libellé, décalage). J = jours, M = mois, A = ans.
 #: Cliquer un ancrage relance le fil à partir de cet instant (remontée vers le passé).
 FEED_ANCHORS = [
@@ -945,6 +976,8 @@ class CaseBrowserPage(QWidget):
         self._cases_by_item: dict = {}  # id(item) -> Case
         self._selected_case = None      # cas du panneau de détail
         self._empty_label = None        # message si aucun cas
+        self._loading = False           # scan d'index en cours (message d'attente)
+        self._populated = None          # signature des lignes déjà affichées
         # Tri courant, mémorisé dans les réglages locaux (propre à chaque poste).
         self._sort = getattr(settings, "browser_sort", SORT_TITLE)
         if self._sort not in (SORT_TITLE, SORT_DATE):
@@ -1227,6 +1260,7 @@ class CaseBrowserPage(QWidget):
                 self.settings.shared_root,
                 viewer=self.settings.user_name,
                 visibility=self.visibility,
+                refresh=False,  # scan fait par le thread de fond
             )
         except Exception:  # noqa: BLE001 (vue best-effort)
             cases = []
@@ -1236,6 +1270,21 @@ class CaseBrowserPage(QWidget):
         types = checked_case_types(self.case_type_checkboxes)
         self._unit_cases = [case for case in cases if case.case_type in types]
         self._refresh_list()
+
+    def set_loading(self, loading: bool) -> None:
+        """Signale qu'un scan d'index est en cours.
+
+        La liste déjà affichée reste en place (elle est rafraîchie à la fin du
+        scan) ; seul l'état vide affiche un message d'attente au lieu de
+        « Aucun cas à afficher », qui serait faux pendant le premier scan.
+        """
+        self._loading = bool(loading)
+        if self._empty_label is not None:
+            self._empty_label.setText(self._empty_text())
+
+    def _empty_text(self) -> str:
+        """Libellé de l'état vide : attente du scan, ou aucun cas."""
+        return "Chargement des cas…" if self._loading else "Aucun cas à afficher."
 
     def _on_case_type_changed(self) -> None:
         """Un type de cas a été (dé)coché : recharge la liste."""
@@ -1265,7 +1314,19 @@ class CaseBrowserPage(QWidget):
         return sorted(cases, key=key, reverse=self._sort_desc)
 
     def _populate(self) -> None:
-        """Reconstruit les lignes de la liste et restaure la sélection."""
+        """Reconstruit les lignes de la liste et restaure la sélection.
+
+        Si la liste affichée est déjà celle demandée (même identifiants, titres
+        et dates), rien n'est reconstruit : un scan d'index qui ne change rien
+        ne doit ni déplacer le défilement ni recharger la vignette du panneau.
+        """
+        signature = tuple(
+            (case.id, case.title, case.date_added, case.date_modified or "",
+             tuple(case.units or ()))
+            for case in self._filtered
+        )
+        if signature == self._populated:
+            return
         previous_id = self._selected_case.id if self._selected_case is not None else ""
         # Les signaux sont coupés : `clear()` viderait sinon la sélection ligne à
         # ligne et rechargerait la vignette du panneau à chaque suppression.
@@ -1281,9 +1342,11 @@ class CaseBrowserPage(QWidget):
             self._cases_by_item[id(item)] = case
         self.case_tree.blockSignals(False)
 
+        self._populated = signature
         has_cases = self.case_tree.topLevelItemCount() > 0
         self.case_tree.setVisible(has_cases)
         if self._empty_label is not None:
+            self._empty_label.setText(self._empty_text())
             self._empty_label.setVisible(not has_cases)
         if not has_cases:
             self._show_selected_case(None)
@@ -1487,7 +1550,6 @@ class FeedView(QWidget):
         self._scroll_pending = False
         self._scroll_attempts = 0
         self._unread_ids: set = set()       # cas « nouveaux » (fond bleu)
-        self._seen_ids: set = set()         # cas déjà passés dans la zone visible
         self._cards_by_id: dict = {}        # id de cas -> carte
         self._cases: list = []              # cas du fil (ancien → récent)
         self._reactions: dict = {}          # id de cas -> {emoji: nombre}
@@ -1574,7 +1636,6 @@ class FeedView(QWidget):
         self._refresh_unit_emoji()
         self._load_reactions()
         self._unread_ids = set(unread_ids or ())
-        self._seen_ids = set()
         self._cards_by_id = {}
         self._reaction_bars = {}
         self._anchor = anchor
@@ -1589,6 +1650,7 @@ class FeedView(QWidget):
                 cases = storage.search_cases(
                     self.settings.shared_root,
                     viewer=self.settings.user_name,
+                    refresh=False,  # scan fait par le thread de fond
                 )
             except Exception:  # noqa: BLE001 (vue best-effort)
                 cases = []
@@ -1883,10 +1945,13 @@ class FeedView(QWidget):
                 self._clear_pill()  # revenu en bas : les cartes sont vues
 
     def _mark_visible_read(self) -> None:
-        """Marque lues les cartes « nouvelles » déjà vues puis sorties de l'écran.
+        """Marque lues les cartes « nouvelles » vues à **plus de la moitié**.
 
-        Une carte reste bleue tant qu'elle est visible ; elle passe au gris
-        lorsqu'elle quitte la zone visible (défilement passé).
+        Une carte cesse d'être bleue dès qu'elle est visible sur plus de
+        ``FEED_READ_VISIBLE_RATIO`` de sa hauteur — et non plus seulement après
+        être entièrement sortie de l'écran. Une carte plus haute que la zone
+        visible (petit écran) compte comme vue dès qu'elle **couvre toute la
+        vue** : sinon elle ne pourrait jamais atteindre la moitié.
         """
         if not self._unread_ids:
             return
@@ -1898,17 +1963,18 @@ class FeedView(QWidget):
             if card is None:
                 continue
             rect = card.geometry()
-            if rect.bottom() > top and rect.top() < bottom:
-                self._seen_ids.add(case_id)   # carte (re)vue : on la garde bleue
-            elif case_id in self._seen_ids:
-                self._mark_read(case_id)      # vue puis sortie de l'écran
+            visible = min(rect.bottom(), bottom) - max(rect.top(), top)
+            if visible <= 0:
+                continue  # hors de vue : rien à marquer
+            covers_view = rect.top() <= top and rect.bottom() >= bottom
+            if visible > rect.height() * FEED_READ_VISIBLE_RATIO or covers_view:
+                self._mark_read(case_id)
 
     def _mark_read(self, case_id) -> None:
         """Passe une carte à « lue » (retire le fond bleu)."""
         if case_id not in self._unread_ids:
             return
         self._unread_ids.discard(case_id)
-        self._seen_ids.discard(case_id)
         card = self._cards_by_id.get(case_id)
         if card is not None:
             self._apply_card_style(card, unread=False)
@@ -2203,6 +2269,9 @@ class MainWindow(QMainWindow):
         self._save_thread = None
         self._save_worker = None
         self._save_kind = ""
+        #: Scan d'index en tâche de fond (I/O réseau) : un seul à la fois.
+        self._index_thread = None
+        self._index_worker = None
         #: Vrai si l'utilisateur a demandé à quitter pendant un enregistrement :
         #: l'arrêt est alors différé jusqu'à la fin du thread.
         self._quit_after_save = False
@@ -2292,6 +2361,11 @@ class MainWindow(QMainWindow):
         self._cleanup_delays = list(LEFTOVER_CLEANUP_DELAYS_MS)
         QTimer.singleShot(self._cleanup_delays.pop(0), self._retry_leftover_cleanup)
 
+        # Scan de l'index hors du thread de l'interface : les onglets
+        # s'affichent tout de suite avec l'index courant, puis se rafraîchissent
+        # quand le parcours du partage est terminé.
+        QTimer.singleShot(0, self._request_index_refresh)
+
     def _build_status_bar(self) -> None:
         """Barre de statut : rouage (paramètres) + nom d'utilisateur / dossier."""
         self.settings_btn = QToolButton()
@@ -2344,7 +2418,9 @@ class MainWindow(QMainWindow):
         """
         try:
             return storage.search_cases(
-                self.settings.shared_root, viewer=self.settings.user_name
+                self.settings.shared_root,
+                viewer=self.settings.user_name,
+                refresh=False,  # scan fait par le thread de fond
             )
         except Exception:  # noqa: BLE001 (vue best-effort)
             return []
@@ -2423,6 +2499,7 @@ class MainWindow(QMainWindow):
         du Fil : les cartes arrivées entre deux passages sont ajoutées sans
         déplacer la lecture (voir :meth:`FeedView.append_cases`).
         """
+        self._request_index_refresh()
         cases = self._load_visible_cases()
         self._feed_cases = cases
         self._update_feed_badge(cases)
@@ -2622,13 +2699,16 @@ class MainWindow(QMainWindow):
             self._tray_announced_ids.clear()
             self.reload_feed_units()
             self._update_feed_badge(getattr(self, "_feed_cases", None))
+            self._request_index_refresh()
         elif index == self.public_list_tab_index:
             self.browser.reload_units()
             self.browser.reload_cases()
+            self._request_index_refresh()
         elif index == self.consult_tab_index:
             self.reload_filter_authors()
             # Affiche par défaut une recherche vide sur la période par défaut.
             self.run_search()
+            self._request_index_refresh()
 
     def _sync_clipboard(self, *, overwrite: bool) -> None:
         """Charge l'image du presse-papiers (une fois).
@@ -3559,6 +3639,66 @@ class MainWindow(QMainWindow):
             self._quit_after_save = False
             self.quit_app()
 
+    # --- Index : scan en tâche de fond ------------------------------------ #
+    def _request_index_refresh(self) -> None:
+        """Demande un scan d'index en tâche de fond (jamais dans l'interface).
+
+        Le parcours de ``cases/`` sur le dossier partagé est l'opération la plus
+        lente de l'application. Il tourne dans un thread dédié et la vue se
+        rafraîchit quand il a terminé (:meth:`_on_index_refreshed`). Un seul
+        scan à la fois : les demandes rapprochées sont fusionnées.
+        """
+        if self._index_thread is not None and self._index_thread.isRunning():
+            return
+        thread = QThread(self)
+        worker = IndexRefreshWorker(self.settings.shared_root)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(self._on_index_refreshed)
+        worker.failed.connect(self._on_index_refresh_failed)
+        worker.done.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.done.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_index_state)
+        self._index_thread = thread
+        self._index_worker = worker
+        browser = getattr(self, "browser", None)
+        if browser is not None:
+            browser.set_loading(True)
+        thread.start()
+
+    def _on_index_refreshed(self, _count: int) -> None:
+        """Index à jour : rafraîchit la vue courante, sans relancer de scan."""
+        browser = getattr(self, "browser", None)
+        if browser is not None:
+            browser.set_loading(False)
+        index = self.tabs.currentIndex()
+        if index == self.public_list_tab_index:
+            browser.reload_cases()  # sans effet si rien n'a changé (signature)
+        elif index == self.feed_tab_index:
+            # Ajout incrémental : pas de `load()` complet, qui ré-ancrerait la
+            # vue sur la date du jour et ferait sauter la lecture.
+            cases = self._load_visible_cases()
+            self._feed_cases = cases
+            self._sync_open_feed(cases)
+            self._update_feed_badge(cases)
+            return
+        # Compteur d'onglet et pastille du tray suivent les cas visibles.
+        self._update_feed_badge(None)
+
+    def _on_index_refresh_failed(self, _message: str) -> None:
+        """Scan impossible (partage injoignable) : on garde l'index existant."""
+        browser = getattr(self, "browser", None)
+        if browser is not None:
+            browser.set_loading(False)
+
+    def _clear_index_state(self) -> None:
+        """Thread de scan terminé : libère la place pour le suivant."""
+        self._index_thread = None
+        self._index_worker = None
+
     # --- Onglet « Consulter » --------------------------------------------- #
     def _build_consult_tab(self) -> QWidget:
         page = QWidget()
@@ -3790,7 +3930,9 @@ class MainWindow(QMainWindow):
 
     def reload_filter_authors(self) -> None:
         """Autocomplétion du champ Auteur à partir des auteurs existants."""
-        authors = storage.all_authors(self.settings.shared_root, viewer=self.settings.user_name)
+        authors = storage.all_authors(
+            self.settings.shared_root, viewer=self.settings.user_name, refresh=False
+        )
         completer = QCompleter(authors, self)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
         completer.setFilterMode(Qt.MatchContains)          # « contient » le mot tapé
@@ -3916,6 +4058,7 @@ class MainWindow(QMainWindow):
                 viewer=self.settings.user_name,
                 visibility=self.selected_search_visibility(),
                 case_types=self.selected_search_case_types(),
+                refresh=False,  # scan fait par le thread de fond
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Erreur de recherche", str(exc))
@@ -4240,6 +4383,13 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Un scan d'index peut tourner : on le laisse se terminer, sinon le
+        # thread serait détruit en pleine activité. Le parcours est borné (le
+        # dossier partagé répond ou échoue), d'où le délai de garde.
+        if self._index_thread is not None:
+            self._index_thread.quit()
+            self._index_thread.wait(10000)
+
         self._quitting = True
         if self._tray is not None:
             self._tray.hide()
@@ -4268,6 +4418,7 @@ class MainWindow(QMainWindow):
             self.reload_feed_units()
             self.browser.set_settings(self.settings)
             self._update_status()
+            self._request_index_refresh()
 
     # ------------------------------------------------------------------ #
     # Mise à jour automatique
@@ -4697,6 +4848,12 @@ def main() -> int:
 
     settings = config.load_settings()
     if not settings.is_configured:
+        # Déploiement de site : proposer le dossier partagé connu sur ce type de
+        # poste, **sans jamais remplacer** un chemin déjà enregistré. Le champ
+        # est seulement prérempli : l'utilisateur le voit, le confirme ou le
+        # change dans le dialogue (aucune écriture avant son accord).
+        if not settings.shared_root.strip():
+            settings.shared_root = deployment.default_shared_root()
         dialog = SettingsDialog(settings)
         if dialog.exec() != QDialog.Accepted:
             return 0

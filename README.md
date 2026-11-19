@@ -42,9 +42,8 @@ partagé**.
   dans `case.md` (`request_number`), affiché à droite du titre dans le plein
   écran et dans la Recherche Avancée, et exporté dans une colonne dédiée. Il
   est prérempli et corrigeable dans l'onglet Édition.
-- **Aucun dossier partagé par défaut** : le chemin est **obligatoire** et choisi
-  au premier lancement (dialogue de réglages), puis modifiable. Aucun chemin
-  réseau propre à un site n'est prérempli.
+- **Dossier partagé obligatoire** : le chemin est choisi (ou confirmé) au
+  premier lancement dans le dialogue de réglages, puis modifiable.
 - **Visibilité** : chaque cas est `public` (défaut) ou `privé`. Un cas privé
   n'apparaît dans la recherche que pour son auteur.
 - **Réglages locaux** dans `settings_data/settings.json`, dans le profil de
@@ -250,8 +249,12 @@ Conçue pour rester fluide avec des **milliers de cas** sur un dossier réseau :
   vue ni déplacer la lecture. Si vous êtes déjà en bas, ils apparaissent
   directement ; sinon une pastille **« ↓ N nouveaux cas »** vous invite à les
   rejoindre (un clic ramène au plus récent) ;
-- l'index local n'est scanné qu'**une fois par rafale** de lectures (anti-rebond),
-  et les auteurs/unités sont lus par requête SQL ciblée.
+- l'index local est **scanné en tâche de fond** (thread dédié), jamais dans le
+  thread de l'interface : changer d'onglet affiche immédiatement l'index courant,
+  puis la vue se rafraîchit quand le parcours du partage est terminé (sans
+  reconstruire la liste ni déplacer la lecture si rien n'a changé). Les lectures
+  rapprochées restent anti-rebondies (un seul scan par rafale), et les
+  auteurs/unités sont lus par requête SQL ciblée.
 
 Ordre de grandeur (213 cas, disque local) : ouverture ~0,3 s, changement d'onglet
 ~0,05 s. La liste de la Bibliothèque se remplit à ~3 ms pour 1 000 cas (sans

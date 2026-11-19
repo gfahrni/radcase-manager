@@ -23,8 +23,11 @@ presse-papiers, dans un **dossier réseau partagé**.
   écriture dans un dossier temporaire `.tmp_<id>` puis `os.rename` **atomique**.
 - Réglages locaux **par utilisateur système** dans `settings_data/settings.json`,
   sous `%LOCALAPPDATA%\RadCaseManager\` (Windows) ; jamais sur le partage.
-  **Aucun dossier partagé par défaut** : le chemin est obligatoire et choisi au
-  premier lancement (dialogue de réglages), puis modifiable. Le nom
+- **Chemin obligatoire, choisi au premier lancement** (dialogue de réglages),
+  puis modifiable. Un défaut **de site** peut préremplir le champ sur un poste
+  reconnu comme appartenant au domaine (voir `deployment.py`) ; il n'est proposé
+  que si le dossier existe réellement, et n'est **jamais** appliqué si un chemin
+  est déjà enregistré. Le nom
   d'auteur est celui du **compte de session Windows** (nom de connexion) ; il est
   ajouté automatiquement à `users.json` et choisi uniquement parmi les
   utilisateurs connus (pas de saisie libre).
@@ -32,12 +35,18 @@ presse-papiers, dans un **dossier réseau partagé**.
 
 ## Modules
 - `config.py` : réglages locaux + chemins (gère le mode PyInstaller « frozen »).
+- `deployment.py` : défaut **de site** du dossier partagé. Détecte le domaine AD
+  (`USERDNSDOMAIN`, repli `whoami /fqdn`) et retourne le chemin du site **si le
+  dossier existe** ; utilisé uniquement au premier lancement, quand aucun chemin
+  n'est enregistré. Best-effort, Windows seulement, jamais un contrôle d'accès.
 - `bootstrap.py` : init du dossier partagé (`cases/`, `units.json`, `users.json`,
   `README.md`).
 - `storage.py` : `create_case()`, `update_case()`, `delete_case()`, `list_cases()`,
   `search_cases()`, plus l'**index local** (`settings_data/index.db`, cache
   reconstructible, maj par mtime). Scan de l'arbre **anti-rebondi** (TTL) pour
-  qu'une rafale de lectures ne déclenche qu'un seul scan.
+  qu'une rafale de lectures ne déclenche qu'un seul scan. Les lectures de
+  l'interface passent `refresh=False` (aucun scan réseau dans le thread
+  graphique) : le scan est fait par `IndexRefreshWorker` dans `main_gui.py`.
 - `reactions.py` : **réactions anonymes du Fil** (7 emojis prédéfinis, un seul
   par utilisateur et par cas). Stockées **hors des dossiers de cas** (les cas
   sont figés), dans `<partage>/reactions/`, un fichier JSON par utilisateur :
@@ -136,6 +145,12 @@ presse-papiers, dans un **dossier réseau partagé**.
   même boîte que le Fil pour partager le cache (`PANE_IMG_W/H` =
   `FEED_IMG_W/H`). Le **Fil** reste en chargement progressif (`FEED_PAGE`).
   Recherche rapide avec anti-rebond.
+  Le **scan de l'index** tourne dans un `QThread` (`IndexRefreshWorker`) et la
+  vue se rafraîchit à la fin : `_on_index_refreshed` recharge la Bibliothèque
+  (sans effet si la signature des lignes est inchangée) ou complète le Fil par
+  `append_cases`. Un seul scan à la fois, demandé à l'ouverture des onglets, au
+  passage périodique du Fil et après un changement de réglages ; `quit_app`
+  attend la fin du scan en cours.
   Le **Fil ouvert se met à jour tout seul** : le passage périodique
   (`FEED_BADGE_INTERVAL_MS`, 2 min) qui met à jour le badge ajoute les cas arrivés
   (`FeedView.append_cases`, insertion **incrémentale** — pas de `load()` complet,

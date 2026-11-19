@@ -945,15 +945,18 @@ def _index_remove(case_id: str) -> None:
 _SELECT_COLS = "id, title, date_added, date_modified, case_type, author, units, image, description, rel_path, mtime, size, visibility, ocr_text, ocr_status, request_number"
 
 
-def list_cases(shared_root: str | Path, viewer: str = "") -> List[Case]:
+def list_cases(
+    shared_root: str | Path, viewer: str = "", *, refresh: bool = True
+) -> List[Case]:
     """Retourne tous les cas visibles (via l'index), du plus récent au plus ancien.
 
     ``viewer`` est le nom de l'utilisateur courant : les cas privés ne sont
     inclus que si ``viewer`` en est l'auteur. Par défaut (``""``), aucun cas
-    privé n'est retourné.
+    privé n'est retourné. ``refresh=False`` interroge l'index sans scan réseau.
     """
     root = Path(shared_root)
-    refresh_index(root)
+    if refresh:
+        refresh_index(root)
     conn = _index_connect()
     try:
         rows = conn.execute(
@@ -978,6 +981,7 @@ def search_cases(
     visibility: Optional[str] = None,
     case_types: Optional[Iterable[str]] = None,
     include_ocr: bool = False,
+    refresh: bool = True,
 ) -> List[Case]:
     """Recherche multi-critères, exécutée sur l'index local.
 
@@ -994,9 +998,15 @@ def search_cases(
     ``include_ocr=True`` étend la recherche plein texte au contenu OCR des
     images (désactivé par défaut, pour ne pas modifier le comportement
     historique de la recherche libre).
+
+    ``refresh=False`` interroge l'index **tel quel**, sans scan du dossier
+    partagé : c'est ce qu'utilise l'interface, où le scan tourne dans un thread
+    de fond (voir :func:`refresh_index`). Le scan réseau ne doit jamais bloquer
+    le thread graphique.
     """
     root = Path(shared_root)
-    refresh_index(root)
+    if refresh:
+        refresh_index(root)
 
     wanted = {u.casefold() for u in (units or [])}
     text_l = (text or "").strip().casefold()
@@ -1047,14 +1057,18 @@ def search_cases(
     return results
 
 
-def _visible_columns(shared_root: str | Path, columns: str) -> List[tuple]:
+def _visible_columns(
+    shared_root: str | Path, columns: str, *, refresh: bool = True
+) -> List[tuple]:
     """Lit les colonnes demandées dans l'index, cas privés d'autrui exclus.
 
     Évite de reconstruire des :class:`Case` complets quand seules quelques
-    colonnes sont nécessaires (auteurs, unités…).
+    colonnes sont nécessaires (auteurs, unités…). ``refresh=False`` interroge
+    l'index sans scan réseau.
     """
     root = Path(shared_root)
-    refresh_index(root)
+    if refresh:
+        refresh_index(root)
     conn = _index_connect()
     try:
         return conn.execute(
@@ -1064,12 +1078,14 @@ def _visible_columns(shared_root: str | Path, columns: str) -> List[tuple]:
         conn.close()
 
 
-def all_unit_tags(shared_root: str | Path, viewer: str = "") -> List[str]:
+def all_unit_tags(
+    shared_root: str | Path, viewer: str = "", *, refresh: bool = True
+) -> List[str]:
     """Liste triée de toutes les unités effectivement utilisées dans les cas."""
     viewer_l = (viewer or "").strip().casefold()
     tags = set()
     for units_json, author, visibility in _visible_columns(
-        shared_root, "units, author, visibility"
+        shared_root, "units, author, visibility", refresh=refresh
     ):
         if not _row_visible(author, visibility, viewer_l):
             continue
@@ -1079,15 +1095,20 @@ def all_unit_tags(shared_root: str | Path, viewer: str = "") -> List[str]:
     return sorted(tags, key=str.casefold)
 
 
-def all_authors(shared_root: str | Path, viewer: str = "") -> List[str]:
+def all_authors(
+    shared_root: str | Path, viewer: str = "", *, refresh: bool = True
+) -> List[str]:
     """Liste triée des auteurs présents dans les cas (pour l'autocomplétion).
 
     Les cas privés d'autrui sont exclus (``viewer``), pour ne pas révéler leur
-    existence via la liste des auteurs.
+    existence via la liste des auteurs. ``refresh=False`` interroge l'index sans
+    scan réseau.
     """
     viewer_l = (viewer or "").strip().casefold()
     authors = set()
-    for author, visibility in _visible_columns(shared_root, "author, visibility"):
+    for author, visibility in _visible_columns(
+        shared_root, "author, visibility", refresh=refresh
+    ):
         name = (author or "").strip()
         if name and _row_visible(author, visibility, viewer_l):
             authors.add(name)

@@ -174,6 +174,14 @@ posé sur le partage réseau :
   qu'au plus une fois toutes les `storage._REFRESH_TTL_SECONDS` secondes. Les
   écritures (création/édition/suppression) mettent l'index à jour directement et
   ne dépendent donc pas de ce délai.
+- **Scan hors du thread graphique** : le parcours de `cases/` sur le partage est
+  l'opération la plus lente. Il est exécuté par `IndexRefreshWorker` (QThread,
+  voir `main_gui.py`) et **toutes** les lectures de l'interface passent
+  `refresh=False` : elles interrogent l'index tel quel, sans I/O réseau, donc
+  sans figer la fenêtre. Quand le scan se termine, la vue courante est
+  rafraîchie : la Bibliothèque ne se reconstruit que si la signature des lignes a
+  changé (sélection et défilement conservés), et le Fil est complété de façon
+  incrémentale (`append_cases`).
 
 Filtres : collection (👥 publique / 👤 privé / les deux), unités, auteur,
 plage de dates, texte (titre + description).
@@ -233,7 +241,8 @@ local, hors chargement d'image).
 
 | Module | Rôle |
 |---|---|
-| `config.py` | réglages locaux (`settings.json`), chemins ; **aucun dossier partagé par défaut** (chemin obligatoire, choisi au premier lancement) |
+| `config.py` | réglages locaux (`settings.json`), chemins ; chemin du dossier partagé obligatoire, choisi au premier lancement |
+| `deployment.py` | défaut **de site** : détecte le domaine AD et propose le dossier partagé du site au premier lancement, seulement s'il existe (jamais si un chemin est déjà enregistré) |
 | `bootstrap.py` | crée `cases/`, `units.json`, `users.json`, `README.md` si absents |
 | `storage.py` | `create_case()`, `list_cases()`, `search_cases()` + index local |
 | `ocr.py` | OCR natif Windows (`Windows.Media.Ocr`) dans un thread dédié, best-effort |
