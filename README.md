@@ -5,19 +5,24 @@
 <h1 align="center">RadCase Manager</h1>
 
 <p align="center">
-  Catalogue de cas radiologiques partagé, sans serveur ni cloud.
+  Catalogue de cas radiologiques partagé — <b>privé et local</b>, sans serveur ni cloud.
 </p>
 
 <p align="center">
   <a href="https://github.com/gfahrni/radcase-manager/releases/latest"><img src="https://img.shields.io/github/v/release/gfahrni/radcase-manager?label=version" alt="Version"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4" alt="Windows 10 / 11">
-  <img src="https://img.shields.io/badge/donn%C3%A9es-dossier%20partag%C3%A9-informational" alt="Données : dossier partagé">
+  <img src="https://img.shields.io/badge/donn%C3%A9es-priv%C3%A9es%20%2F%20locales-informational" alt="Données privées et locales">
 </p>
 
 RadCase Manager permet à une équipe de radiologues de constituer et de consulter
 ensemble une bibliothèque de cas cliniques. On colle une capture d'écran du PACS,
 on décrit le cas, il rejoint le catalogue partagé du service — et il est
 immédiatement visible des collègues.
+
+**Les données restent privées et locales.** Les cas vivent dans un dossier réseau
+du service, rien n'est envoyé sur Internet (la seule connexion sortante sert à
+vérifier les mises à jour). Pas de serveur à installer, pas de cloud, pas de
+compte à créer.
 
 ## Ce qu'il fait
 
